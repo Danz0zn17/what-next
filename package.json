@@ -1,0 +1,24 @@
+{
+  "name": "what-next",
+  "version": "1.0.0",
+  "description": "What Next — AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "api": "node src/api-server.js",
+    "chatgpt:login": "node src/scrape-chatgpt.js --login",
+    "chatgpt:scrape": "node src/scrape-chatgpt.js --scrape",
+    "chatgpt:preview": "node src/scrape-chatgpt.js --scrape --dry-run",
+    "backfill": "node src/backfill-embeddings.js"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.0.0",
+    "express": "^5.2.1",
+    "pg": "^8.20.0",
+    "playwright": "^1.58.2",
+    "zod": "^4.3.6"
+  }
+}
