@@ -1256,35 +1256,24 @@
 (function () {
   var widget = document.getElementById('diag-widget');
   if (!widget) return;
-  var ids = ['d-claude', 'd-vscode', 'd-gh', 'd-tg'];
   var fired = false;
 
   new IntersectionObserver(function (entries) {
     if (entries[0].isIntersecting && !fired) {
       fired = true;
       setTimeout(function () {
-        ids.forEach(function (id, i) {
-          setTimeout(function () {
-            var el  = document.getElementById(id);
-            var row = el.closest('.diag-row');
-            el.textContent = 'connecting\u2026';
-            el.className   = 'diag-val';
-            el.style.color = 'var(--text-3)';
-            setTimeout(function () {
-              el.textContent = 'context: shared \u2713';
-              el.className   = 'diag-val ok';
-              el.style.color = '';
-              row.classList.add('lit');
-            }, 500);
-          }, i * 380);
-        });
+        var all = document.getElementById('d-all');
+        var row = document.getElementById('diag-all-row');
+        all.textContent = 'connecting\u2026';
+        all.className   = 'diag-val';
+        all.style.color = 'var(--text-3)';
         setTimeout(function () {
-          var all = document.getElementById('d-all');
-          document.getElementById('diag-all-row').classList.add('lit');
           all.textContent = 'context: shared \u2713';
           all.className   = 'diag-val shared';
-        }, ids.length * 380 + 600);
-      }, 700);
+          all.style.color = '';
+          row.classList.add('lit');
+        }, 700);
+      }, 800);
     }
   }, { threshold: 0.45 }).observe(widget);
 }());
