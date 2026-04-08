@@ -34,6 +34,7 @@ const ADMIN_KEY = process.env.ADMIN_KEY;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const RESEND_FROM = process.env.RESEND_FROM ?? 'What Next <noreply@whatnextai.co.za>';
+const TELEGRAM_ALERT_URL = process.env.TELEGRAM_ALERT_URL; // optional: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text=
 
 if (!process.env.DATABASE_URL) {
   process.stderr.write('[cloud] DATABASE_URL is required\n');
@@ -41,6 +42,56 @@ if (!process.env.DATABASE_URL) {
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
+// ─── Rate limiting ────────────────────────────────────────────────────────────
+// Simple in-memory sliding window: 60 requests per minute per IP
+const rateLimitMap = new Map();
+const RATE_LIMIT = 60;
+const RATE_WINDOW_MS = 60_000;
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip) ?? { count: 0, reset: now + RATE_WINDOW_MS };
+  if (now > entry.reset) {
+    entry.count = 0;
+    entry.reset = now + RATE_WINDOW_MS;
+  }
+  entry.count++;
+  rateLimitMap.set(ip, entry);
+  return { allowed: entry.count <= RATE_LIMIT, remaining: Math.max(0, RATE_LIMIT - entry.count), reset: entry.reset };
+}
+// Prune stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) if (now > entry.reset + 60_000) rateLimitMap.delete(ip);
+}, 5 * 60_000);
+
+// ─── Self-healing: error tracking + Telegram alert ────────────────────────────
+let recentErrors = [];
+const ERROR_THRESHOLD = 5; // alert after this many errors in 5 minutes
+const ERROR_WINDOW_MS = 5 * 60_000;
+
+function trackError(msg) {
+  const now = Date.now();
+  recentErrors.push(now);
+  recentErrors = recentErrors.filter(t => now - t < ERROR_WINDOW_MS);
+  if (recentErrors.length === ERROR_THRESHOLD) {
+    sendTelegramAlert(`[What Next Cloud] ${ERROR_THRESHOLD} errors in 5 min. Latest: ${msg}`);
+  }
+}
+
+function sendTelegramAlert(text) {
+  if (!TELEGRAM_ALERT_URL) return;
+  const url = `${TELEGRAM_ALERT_URL}${encodeURIComponent(text)}`;
+  fetch(url, { signal: AbortSignal.timeout(5_000) }).catch(() => {});
+}
+
+// Alert on process crash (unhandled rejection)
+process.on('unhandledRejection', (err) => {
+  const msg = err?.message ?? String(err);
+  process.stderr.write(`[cloud] Unhandled rejection: ${msg}\n`);
+  sendTelegramAlert(`[What Next Cloud] Unhandled rejection: ${msg}`);
+});
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -353,6 +404,15 @@ async function start() {
       return;
     }
 
+    // Rate limit (skip health check)
+    if (url.pathname !== '/health') {
+      const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() ?? req.socket.remoteAddress ?? 'unknown';
+      const rl = checkRateLimit(ip);
+      res.setHeader('X-RateLimit-Limit', RATE_LIMIT);
+      res.setHeader('X-RateLimit-Remaining', rl.remaining);
+      if (!rl.allowed) return send(res, 429, { error: 'Too many requests. Limit: 60/min.' });
+    }
+
     // ── Public: health ──
     if (method === 'GET' && url.pathname === '/health') {
       return send(res, 200, { ok: true, service: 'what-next-cloud' });
@@ -491,6 +551,7 @@ async function start() {
       send(res, 404, { error: 'Not found' });
     } catch (err) {
       process.stderr.write(`[cloud] Request error: ${err.message}\n`);
+      trackError(err.message);
       send(res, 500, { error: 'Internal server error' });
     }
   });

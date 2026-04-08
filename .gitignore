@@ -4,3 +4,7 @@ data/
 *.log
 .DS_Store
 package-lock 2.json
+RETROSPECTIVE.md
+cloud-server/
+agent-blue-setup/
+.claude/
