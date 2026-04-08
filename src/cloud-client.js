@@ -112,3 +112,8 @@ export async function postFeedback(data) {
     body: JSON.stringify(data),
   });
 }
+
+export async function exportSince(since) {
+  const param = since ? `?since=${encodeURIComponent(since)}` : '';
+  return fetchCloud(`/export${param}`);
+}

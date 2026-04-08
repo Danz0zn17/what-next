@@ -8,5 +8,7 @@ const require = createRequire(import.meta.url);
 try { require('dotenv').config(); } catch {} // Load .env if present (optional dep)
 
 import { startApiServer } from './api.js';
+import { startPeriodicSync } from './sync.js';
 
 startApiServer();
+startPeriodicSync();

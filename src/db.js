@@ -80,7 +80,18 @@ db.exec(`
     payload    TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS sync_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
+
+// Migrations: add cloud_id to sessions + facts for sync dedup (safe to run on existing DBs)
+try { db.exec('ALTER TABLE sessions ADD COLUMN cloud_id TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts    ADD COLUMN cloud_id TEXT'); } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_cloud_id ON sessions(cloud_id) WHERE cloud_id IS NOT NULL'); } catch {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_cloud_id    ON facts(cloud_id)    WHERE cloud_id IS NOT NULL'); } catch {}
 
 // --- Project helpers ---
 export function upsertProject(name, description = null) {
@@ -192,6 +203,43 @@ export function getPendingGists() {
 
 export function deletePendingGist(id) {
   db.prepare('DELETE FROM pending_gists WHERE id = ?').run(id);
+}
+
+// --- Sync state helpers ---
+export function getLastCloudSync() {
+  const row = db.prepare('SELECT value FROM sync_state WHERE key = ?').get('last_cloud_sync');
+  return row?.value ?? null;
+}
+
+export function setLastCloudSync(iso) {
+  db.prepare('INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)').run('last_cloud_sync', iso);
+}
+
+// --- Cloud sync upserts (idempotent — skips if cloud_id already exists locally) ---
+export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_was_built, decisions, stack, next_steps, tags, session_date }) {
+  if (!project_name || !summary) return;
+  if (cloud_id) {
+    const exists = db.prepare('SELECT id FROM sessions WHERE cloud_id = ?').get(String(cloud_id));
+    if (exists) return;
+  }
+  const projectId = upsertProject(project_name);
+  db.prepare(`
+    INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, summary, what_was_built ?? null, decisions ?? null, stack ?? null, next_steps ?? null, tags ?? null, session_date ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null);
+}
+
+export function upsertFactFromCloud({ cloud_id, project_name, category, content, tags, created_at }) {
+  if (!category || !content) return;
+  if (cloud_id) {
+    const exists = db.prepare('SELECT id FROM facts WHERE cloud_id = ?').get(String(cloud_id));
+    if (exists) return;
+  }
+  const projectId = project_name ? upsertProject(project_name) : null;
+  db.prepare(`
+    INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(projectId, category, content, tags ?? null, created_at ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null);
 }
 
 export default db;

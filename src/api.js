@@ -16,6 +16,7 @@
 import { createServer } from 'http';
 import { addSession, addFact, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
+import * as cloud from './cloud-client.js';
 
 const PORT = process.env.WHATNEXT_PORT ?? 3747;
 
@@ -561,6 +562,8 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.project || !body.summary) return send(res, 400, { error: 'project and summary are required' });
         const id = addSession(body);
+        // Write-through to cloud (fire and forget — local write already succeeded)
+        if (cloud.isEnabled()) cloud.postSession(body).catch(() => {});
         return send(res, 201, { id, message: 'Session stored' });
       }
 
@@ -569,6 +572,8 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.category || !body.content) return send(res, 400, { error: 'category and content are required' });
         const id = addFact(body);
+        // Write-through to cloud (fire and forget)
+        if (cloud.isEnabled()) cloud.postFact(body).catch(() => {});
         return send(res, 201, { id, message: 'Fact stored' });
       }
 

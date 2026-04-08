@@ -465,6 +465,29 @@ async function start() {
         return send(res, 200, project);
       }
 
+      // GET /export?since=ISO_DATE — bulk pull for local↔cloud sync
+      if (method === 'GET' && url.pathname === '/export') {
+        const since = url.searchParams.get('since') ?? new Date(0).toISOString();
+        const { rows: sessions } = await pool.query(`
+          SELECT s.id::TEXT AS cloud_id, p.name AS project_name, s.summary,
+                 s.what_was_built, s.decisions, s.stack, s.next_steps, s.tags,
+                 s.session_date::TEXT AS session_date, s.created_at::TEXT AS created_at
+          FROM sessions s
+          JOIN projects p ON p.id = s.project_id
+          WHERE s.user_id = $1 AND s.created_at > $2
+          ORDER BY s.created_at ASC
+        `, [user.id, since]);
+        const { rows: facts } = await pool.query(`
+          SELECT f.id::TEXT AS cloud_id, p.name AS project_name, f.category,
+                 f.content, f.tags, f.created_at::TEXT AS created_at
+          FROM facts f
+          LEFT JOIN projects p ON p.id = f.project_id
+          WHERE f.user_id = $1 AND f.created_at > $2
+          ORDER BY f.created_at ASC
+        `, [user.id, since]);
+        return send(res, 200, { sessions, facts, exported_at: new Date().toISOString() });
+      }
+
       send(res, 404, { error: 'Not found' });
     } catch (err) {
       process.stderr.write(`[cloud] Request error: ${err.message}\n`);
