@@ -204,24 +204,27 @@ async function upsertProject(userId, name, description = null) {
   return rows[0].id;
 }
 
+// Field length caps — prevents runaway storage abuse
+const cap = (s, n) => (s == null ? null : String(s).slice(0, n));
+
 async function addSession(userId, { project, summary, what_was_built, decisions, stack, next_steps, tags }) {
-  const projectId = await upsertProject(userId, project);
+  const projectId = await upsertProject(userId, cap(project, 100));
   const { rows } = await pool.query(`
     INSERT INTO sessions (user_id, project_id, summary, what_was_built, decisions, stack, next_steps, tags)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING id
-  `, [userId, projectId, summary, what_was_built ?? null, decisions ?? null, stack ?? null, next_steps ?? null, tags ?? null]);
+  `, [userId, projectId, cap(summary, 4000), cap(what_was_built, 8000), cap(decisions, 4000), cap(stack, 1000), cap(next_steps, 4000), cap(tags, 500)]);
   return rows[0].id;
 }
 
 async function addFact(userId, { category, content, project, tags }) {
   let projectId = null;
-  if (project) projectId = await upsertProject(userId, project);
+  if (project) projectId = await upsertProject(userId, cap(project, 100));
   const { rows } = await pool.query(`
     INSERT INTO facts (user_id, project_id, category, content, tags)
     VALUES ($1, $2, $3, $4, $5)
     RETURNING id
-  `, [userId, projectId, category, content, tags ?? null]);
+  `, [userId, projectId, cap(category, 200), cap(content, 4000), cap(tags, 500)]);
   return rows[0].id;
 }
 
@@ -374,10 +377,21 @@ function send(res, status, body) {
   res.end(payload);
 }
 
+const MAX_BODY_BYTES = 64 * 1024; // 64KB — more than enough for any session dump
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', c => (raw += c));
+    let size = 0;
+    req.on('data', c => {
+      size += Buffer.byteLength(c);
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+        return;
+      }
+      raw += c;
+    });
     req.on('end', () => {
       try { resolve(JSON.parse(raw || '{}')); } catch { reject(new Error('Invalid JSON')); }
     });
@@ -550,9 +564,10 @@ async function start() {
 
       send(res, 404, { error: 'Not found' });
     } catch (err) {
+      const status = err.statusCode ?? 500;
       process.stderr.write(`[cloud] Request error: ${err.message}\n`);
-      trackError(err.message);
-      send(res, 500, { error: 'Internal server error' });
+      if (status === 500) trackError(err.message);
+      send(res, status, { error: status === 413 ? 'Request body too large' : 'Internal server error' });
     }
   });
 
