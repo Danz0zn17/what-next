@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node src/cloud-server.js",
+    "mcp": "node src/server.js",
     "cloud": "node src/cloud-server.js",
     "api": "node src/api-server.js",
     "chatgpt:login": "node src/scrape-chatgpt.js --login",
