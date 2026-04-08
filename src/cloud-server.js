@@ -257,6 +257,7 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
     git clone https://github.com/Danz0zn17/what-next.git ~/what-next<br>
     cd ~/what-next && npm install
   </div>
+  <p style="color:#888;line-height:1.75;margin-bottom:12px">Full setup guide and tool reference: <a href="https://github.com/Danz0zn17/what-next#readme" style="color:#f0f0f0">github.com/Danz0zn17/what-next</a></p>
   <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">2. Add to Claude Desktop</strong> — edit <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">~/Library/Application Support/Claude/claude_desktop_config.json</code></p>
   <div style="background:#0c0c0c;border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:14px 18px;font-family:monospace;font-size:12px;margin-bottom:16px;color:#888;line-height:1.9">
     "mcpServers": {<br>
