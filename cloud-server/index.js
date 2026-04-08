@@ -24,7 +24,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT ?? 3747;
 const app = express();
 
-app.use(express.json());
+// ── Security middleware ───────────────────────────────────────────────────────
+
+// Body size limit — prevent large payload DoS
+app.use(express.json({ limit: '64kb' }));
+
+// Basic rate limiting — 120 requests per minute per IP
+const rateBuckets = new Map();
+app.use((req, res, next) => {
+  if (req.path === '/health') return next(); // skip health checks
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+  const now = Date.now();
+  const bucket = rateBuckets.get(ip) ?? { count: 0, reset: now + 60_000 };
+  if (now > bucket.reset) { bucket.count = 0; bucket.reset = now + 60_000; }
+  bucket.count++;
+  rateBuckets.set(ip, bucket);
+  if (bucket.count > 120) return res.status(429).json({ error: 'Too many requests' });
+  next();
+});
+
+// Disable fingerprinting
+app.disable('x-powered-by');
 
 // ── Health ────────────────────────────────────────────────────────────────────
 

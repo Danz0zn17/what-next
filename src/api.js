@@ -7,13 +7,15 @@
  *   GET  /              → Web form for manual session dumps
  *   POST /session       → Dump a session (JSON body)
  *   POST /fact          → Store a fact (JSON body)
- *   GET  /search?q=...  → Search memories
- *   GET  /projects      → List all projects
- *   GET  /project/:name → Get full project history
+ *   GET  /search?q=...          → FTS search memories
+ *   POST /semantic-search       → Vector/semantic search memories
+ *   GET  /projects              → List all projects
+ *   GET  /project/:name         → Get full project history
  */
 
 import { createServer } from 'http';
-import { addSession, addFact, searchMemories, getProject, listProjects } from './db.js';
+import { addSession, addFact, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById } from './db.js';
+import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 
 const PORT = process.env.WHATNEXT_PORT ?? 3747;
 
@@ -539,9 +541,11 @@ export function startApiServer() {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const method = req.method;
 
-    // CORS preflight
+    // CORS preflight — local-only (localhost origins only)
     if (method === 'OPTIONS') {
-      res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' });
+      const origin = req.headers.origin ?? '';
+      const allowed = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : 'null';
+      res.writeHead(204, { 'Access-Control-Allow-Origin': allowed, 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' });
       res.end();
       return;
     }
@@ -574,6 +578,27 @@ export function startApiServer() {
         if (!q) return send(res, 400, { error: 'q parameter required' });
         const limit = parseInt(url.searchParams.get('limit') ?? '10');
         return send(res, 200, searchMemories(q, limit));
+      }
+
+      // POST /semantic-search — vector similarity search
+      if (method === 'POST' && url.pathname === '/semantic-search') {
+        const body = await parseBody(req);
+        if (!body.query) return send(res, 400, { error: 'query field required' });
+        const limit = body.limit ?? 10;
+        const queryEmbedding = await generateEmbedding(body.query);
+        const allEmbeddings = getAllEmbeddings();
+        const scored = allEmbeddings.map(({ rowtype, row_id, embedding }) => ({
+          rowtype,
+          row_id,
+          score: cosineSimilarity(queryEmbedding, embedding),
+        }));
+        scored.sort((a, b) => b.score - a.score);
+        const top = scored.slice(0, limit);
+        const results = top.map(({ rowtype, row_id, score }) => {
+          const record = rowtype === 'session' ? getSessionById(row_id) : getFactById(row_id);
+          return record ? { ...record, rowtype, score } : null;
+        }).filter(Boolean);
+        return send(res, 200, { results });
       }
 
       // POST /ingest — accepts a raw WHAT NEXT DUMP block from ChatGPT bookmarklet
@@ -623,6 +648,16 @@ export function startApiServer() {
       send(res, 404, { error: 'Not found' });
     } catch (err) {
       send(res, 500, { error: err.message });
+    }
+  });
+
+  httpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      process.stderr.write(`[what-next] Port ${PORT} in use, retrying in 5s...\n`);
+      setTimeout(() => httpServer.listen(PORT, '127.0.0.1'), 5000);
+    } else {
+      process.stderr.write(`[what-next] Server error: ${err.message}\n`);
+      process.exit(1);
     }
   });
 
