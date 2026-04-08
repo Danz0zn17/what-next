@@ -45,19 +45,20 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 async function initSchema() {
-  // Drop old single-tenant tables if they exist without user_id (one-time migration)
-  const { rows: cols } = await pool.query(`
-    SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'projects' AND column_name = 'user_id'
+  // Check how many of our core tables have user_id — if any are missing, wipe and rebuild
+  const { rows } = await pool.query(`
+    SELECT COUNT(*)::int AS cnt
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name IN ('projects', 'sessions', 'facts')
+      AND column_name = 'user_id'
   `);
-  if (cols.length === 0) {
-    process.stderr.write('[cloud] Migrating: dropping old schema (no user_id found)\n');
-    await pool.query(`
-      DROP TABLE IF EXISTS facts CASCADE;
-      DROP TABLE IF EXISTS sessions CASCADE;
-      DROP TABLE IF EXISTS projects CASCADE;
-      DROP TABLE IF EXISTS users CASCADE;
-    `);
+  if (rows[0].cnt < 3) {
+    process.stderr.write('[cloud] Migrating: old schema detected — rebuilding\n');
+    await pool.query('DROP TABLE IF EXISTS facts CASCADE');
+    await pool.query('DROP TABLE IF EXISTS sessions CASCADE');
+    await pool.query('DROP TABLE IF EXISTS projects CASCADE');
+    await pool.query('DROP TABLE IF EXISTS users CASCADE');
   }
 
   await pool.query(`
@@ -68,8 +69,9 @@ async function initSchema() {
       name       TEXT,
       plan       TEXT NOT NULL DEFAULT 'beta',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS projects (
       id          SERIAL PRIMARY KEY,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -78,8 +80,9 @@ async function initSchema() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(user_id, name)
-    );
-
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id             SERIAL PRIMARY KEY,
       user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -92,8 +95,9 @@ async function initSchema() {
       tags           TEXT,
       session_date   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
+    )
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS facts (
       id         SERIAL PRIMARY KEY,
       user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -102,12 +106,11 @@ async function initSchema() {
       content    TEXT NOT NULL,
       tags       TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-    CREATE INDEX IF NOT EXISTS idx_facts_user    ON facts(user_id);
-    CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+    )
   `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_facts_user    ON facts(user_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)');
   process.stderr.write('[cloud] Schema ready\n');
 }
 
