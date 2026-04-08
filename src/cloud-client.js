@@ -105,3 +105,10 @@ export async function listProjects() {
 export async function getProject(name) {
   return fetchCloud(`/project/${encodeURIComponent(name)}`);
 }
+
+export async function postFeedback(data) {
+  return fetchCloud('/feedback', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}

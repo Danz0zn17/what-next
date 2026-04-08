@@ -111,6 +111,17 @@ async function initSchema() {
   await pool.query('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_facts_user    ON facts(user_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type       TEXT NOT NULL DEFAULT 'general',
+      message    TEXT NOT NULL,
+      context    TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id)');
   process.stderr.write('[cloud] Schema ready\n');
 }
 
@@ -274,6 +285,8 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
   <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">3. Add to VS Code / GitHub Copilot</strong> — same config in <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">~/Library/Application Support/Code/User/mcp.json</code> using <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">"servers"</code> instead of <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">"mcpServers"</code></p>
   <p style="color:#888;line-height:1.75;margin-bottom:32px"><strong style="color:#f0f0f0">4. Restart Claude / VS Code</strong> — What Next will appear as an available tool.</p>
   <p style="color:#888;line-height:1.75;margin-bottom:8px">If anything breaks, reply to this email directly. This is a real beta — your feedback shapes what gets built next.</p>
+  <p style="color:#888;line-height:1.75;margin-bottom:28px">You can also send feedback directly from your AI: just ask it to <em>send feedback to What Next</em> — it'll use the <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">send_feedback</code> tool.</p>
+  <p style="font-size:13px;color:#444;line-height:1.75;margin-bottom:28px;padding:16px;border:1px solid rgba(255,255,255,0.05);border-radius:6px"><strong style="color:#666">What data is stored:</strong> Only what your AI explicitly saves — session summaries, facts, and any feedback you choose to send. No passive telemetry, no error snooping, no tracking. Your data is isolated to your API key and is never shared. You can ask me to delete it at any time.</p>
   <p style="color:#555;margin-bottom:32px">— Danny, Greenberries</p>
   <hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin-bottom:24px">
   <p style="font-size:12px;color:#333">whatnextai.co.za · Built by Greenberries</p>
@@ -402,6 +415,18 @@ async function start() {
     if (!user) return send(res, 401, { error: 'Invalid or missing API key' });
 
     try {
+      // POST /feedback
+      if (method === 'POST' && url.pathname === '/feedback') {
+        const body = await parseBody(req);
+        if (!body.message) return send(res, 400, { error: 'message is required' });
+        const { rows } = await pool.query(`
+          INSERT INTO feedback (user_id, type, message, context)
+          VALUES ($1, $2, $3, $4) RETURNING id
+        `, [user.id, body.type ?? 'general', body.message, body.context ?? null]);
+        process.stderr.write(`[cloud] Feedback from ${user.email}: ${body.message.slice(0, 80)}\n`);
+        return send(res, 201, { id: rows[0].id, message: 'Feedback received — thank you' });
+      }
+
       // POST /session
       if (method === 'POST' && url.pathname === '/session') {
         const body = await parseBody(req);

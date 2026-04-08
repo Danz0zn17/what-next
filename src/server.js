@@ -4,8 +4,7 @@ import { z } from 'zod';
 import { addSession, addFact, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
-import { CloudUnavailableError } from './cloud-client.js';
-import { syncPending, dumpToGist } from './gist-client.js';
+import { CloudUnavailableError } from './cloud-client.js';import { syncPending, dumpToGist } from './gist-client.js';
 
 const server = new McpServer({
   name: 'what-next',
@@ -306,6 +305,27 @@ server.tool(
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+// ─── TOOL: send_feedback ─────────────────────────────────────────────────────
+server.tool(
+  'send_feedback',
+  {
+    message: z.string().describe('Your feedback, bug report, or feature request'),
+    type: z.enum(['bug', 'feature', 'general']).optional().describe('Type of feedback'),
+    context: z.string().optional().describe('Any extra context — what you were doing, what you expected'),
+  },
+  async (args) => {
+    if (!cloud.isEnabled()) {
+      return { content: [{ type: 'text', text: 'Cloud not configured — feedback could not be sent.' }] };
+    }
+    try {
+      await cloud.postFeedback(args);
+      return { content: [{ type: 'text', text: 'Feedback sent to Danny. Thank you!' }] };
+    } catch {
+      return { content: [{ type: 'text', text: 'Could not reach cloud — feedback not sent.' }] };
+    }
   }
 );
 
