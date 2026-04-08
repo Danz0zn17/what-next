@@ -1,104 +1,131 @@
-# What Next — Persistent Second Brain
+# What Next
 
-Danny's personal memory server. Stores all project sessions, facts, and context across every AI tool he uses.
+**Your AI second brain.** What Next keeps context across every AI tool you use. When you start a new conversation — in Claude, VS Code Copilot, or anywhere else — it already knows what you were building, what decisions you made, and what comes next.
 
-## What It Is
+No more copy-pasting context. No more re-explaining your stack. It just knows.
 
-A local MCP server + REST API that runs 24/7 on Danny's Mac. Every AI session — VS Code Copilot, Claude Desktop, Hermes (Telegram bot), and Node.js Hermes CLI — reads and writes to it so context is never lost between conversations or tools.
+---
 
-## Architecture
+## How It Works
+
+What Next runs a local MCP server on your Mac. Every AI tool connects to it. When you finish a session, your AI dumps a summary. When you start a new one, it loads it back. All of it synced to the cloud so your memory is safe even if your machine dies.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Danny's Mac                          │
-│                                                             │
-│  ┌──────────────┐   MCP stdio   ┌──────────────────────┐   │
-│  │  VS Code     │ ◄────────────► │                      │   │
-│  │  (Copilot)   │               │   what-next           │   │
-│  └──────────────┘               │   MCP server          │   │
-│                                 │   (src/server.js)     │   │
-│  ┌──────────────┐   MCP stdio   │                       │   │
-│  │ Claude       │ ◄────────────► │   SQLite DB           │   │
-│  │ Desktop      │               │   (data/memory.db)    │   │
-│  └──────────────┘               │                       │   │
-│                                 │   REST API            │   │
-│  ┌──────────────┐   REST :3747  │   (src/api-server.js) │   │
-│  │ Hermes       │ ◄────────────►│                       │   │
-│  │ (Python)     │               └──────────────────────┘   │
-│  │ Telegram bot │                                           │
-│  └──────────────┘                                           │
-│                                                             │
-│  ┌──────────────┐   REST :3747                             │
-│  │ Hermes       │ ◄────────────►  same REST API            │
-│  │ (Node.js CLI)│                                           │
-│  └──────────────┘                                           │
-│                                                             │
-│  ┌──────────────┐   MCP stdio                              │
-│  │ GitHub       │ ◄────────────►  same MCP server          │
-│  │ Copilot CLI  │                                           │
-│  └──────────────┘                                           │
-└─────────────────────────────────────────────────────────────┘
+Your AI tools  ──MCP──►  What Next (local)  ──HTTPS──►  Cloud (Railway)
+(Claude, VS Code,         runs on your Mac               Postgres, isolated
+ Copilot, Hermes)         SQLite cache                   per API key
 ```
 
-## Services & Auto-Start
+---
 
-Both services are registered as macOS LaunchAgents and start automatically at login with KeepAlive (auto-restart on crash):
+## Prerequisites
 
-| Service | LaunchAgent | Port/Transport |
-|---|---|---|
-| MCP server (`src/server.js`) | via VS Code / Claude Desktop / Copilot CLI (spawned on demand) | stdio |
-| REST API (`src/api-server.js`) | `com.whatnextai.api` | `localhost:3747` |
+- **macOS** (Apple Silicon or Intel — tested on macOS 14+)
+- **Node.js 20+** — install via [nodejs.org](https://nodejs.org) or `brew install node`
+- **Claude Desktop** and/or **VS Code with GitHub Copilot** — at least one AI surface
 
-## MCP Tools Available
+---
 
-| Tool | Description |
-|---|---|
-| `dump_session` | Save a session summary for a project |
-| `get_project` | Load full session history for a project |
-| `list_projects` | List all known projects |
-| `add_fact` | Store a persistent fact |
-| `search_memories` | Full-text search across sessions and facts |
-| `semantic_search` | Vector similarity search (embedding-based) |
-| `list_resources` / `read_resource` | Browse stored files/resources |
-| `list_prompts` / `get_prompt` | Access stored prompt templates |
+## Setup (2 minutes)
 
-## REST API Endpoints (localhost:3747)
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/projects` | List all projects |
-| GET | `/project/:name` | Get project + sessions |
-| POST | `/session` | Save a session |
-| GET | `/search?q=` | Search sessions + facts |
-| POST | `/fact` | Add a fact |
-| GET | `/health` | Health check |
-
-## Config Locations (per tool)
-
-| Tool | Config File |
-|---|---|
-| VS Code | `~/Library/Application Support/Code/User/mcp.json` |
-| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Hermes (Python gateway) | `~/.hermes/config.yaml` → `mcp_servers.what-next` |
-| GitHub Copilot CLI | `~/.config/github-copilot/mcp.json` |
-| Node.js Hermes CLI | `~/Documents/projects/hermes/src/memory.js` → `localhost:3747` |
-
-## Running Locally
+**1. Clone the repo**
 
 ```bash
-# MCP server (spawned automatically by AI tools — no manual start needed)
-npm start
-
-# REST API (managed by LaunchAgent — no manual start needed)
-npm run api
-
-# Manually restart REST API if needed
-launchctl stop com.whatnextai.api && launchctl start com.whatnextai.api
+git clone https://github.com/Danz0zn17/what-next.git ~/what-next
+cd ~/what-next && npm install
 ```
+
+**2. Add to Claude Desktop**
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "what-next": {
+      "command": "node",
+      "args": ["~/what-next/src/server.js"],
+      "env": {
+        "WHATNEXT_CLOUD_URL": "https://what-next-production.up.railway.app",
+        "WHATNEXT_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+**3. Add to VS Code / GitHub Copilot**
+
+Edit `~/Library/Application Support/Code/User/mcp.json`:
+
+```json
+{
+  "servers": {
+    "what-next": {
+      "command": "node",
+      "args": ["~/what-next/src/server.js"],
+      "env": {
+        "WHATNEXT_CLOUD_URL": "https://what-next-production.up.railway.app",
+        "WHATNEXT_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+**4. Restart Claude Desktop / VS Code**
+
+What Next will appear as an available MCP tool. You'll see tools like `dump_session`, `get_project`, `search_memories` in your AI's tool list.
+
+---
+
+## Available Tools
+
+Once connected, your AI can use these tools automatically:
+
+| Tool | What it does |
+|---|---|
+| `dump_session` | Save a summary of the current session — what was built, decisions made, next steps |
+| `get_project` | Load full history for a project — all prior sessions in one call |
+| `list_projects` | See all known projects with session counts and last activity |
+| `search_memories` | Full-text search across all sessions and facts |
+| `add_fact` | Store a persistent fact (preference, config, decision) that isn't tied to a session |
+| `semantic_search` | Embedding-based search — finds related context even without exact keyword matches |
+
+---
+
+## What to Try First
+
+Ask your AI (Claude or Copilot) at the start of any work session:
+
+> *"Check What Next — what do you know about this project?"*
+
+After a session, tell it:
+
+> *"Dump this session to What Next."*
+
+It handles the rest.
+
+---
+
+## Troubleshooting
+
+**Tools don't appear in Claude/VS Code**
+- Restart the app after editing the config
+- Check the path: `~/what-next/src/server.js` — if you cloned somewhere else, update the path
+- Make sure `WHATNEXT_API_KEY` is set to your key (from the welcome email)
+
+**"Invalid or missing API key" errors**
+- Your API key is wrong or missing from the config env block
+- Double-check you replaced `your_api_key_here` with the actual key
+
+**Session not syncing to cloud**
+- Check your Internet connection
+- The local SQLite still works offline — it'll sync next time
+
+---
 
 ## Stack
 
-- Node.js + `@modelcontextprotocol/sdk`
-- SQLite (via `better-sqlite3`)
-- Vector embeddings for semantic search
-- macOS LaunchAgent for 24/7 uptime
+Node.js · SQLite · Postgres · MCP SDK · Railway · macOS LaunchAgent
+
