@@ -45,6 +45,21 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejec
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 async function initSchema() {
+  // Drop old single-tenant tables if they exist without user_id (one-time migration)
+  const { rows: cols } = await pool.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'projects' AND column_name = 'user_id'
+  `);
+  if (cols.length === 0) {
+    process.stderr.write('[cloud] Migrating: dropping old schema (no user_id found)\n');
+    await pool.query(`
+      DROP TABLE IF EXISTS facts CASCADE;
+      DROP TABLE IF EXISTS sessions CASCADE;
+      DROP TABLE IF EXISTS projects CASCADE;
+      DROP TABLE IF EXISTS users CASCADE;
+    `);
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id         SERIAL PRIMARY KEY,
