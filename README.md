@@ -125,6 +125,25 @@ It handles the rest.
 
 ---
 
+## Optional: Hermes (Telegram Bot)
+
+If you're running [Hermes](https://github.com/Danz0zn17/hermes) as your AI Telegram bot, add What Next to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  what-next:
+    command: node
+    args: ["~/what-next/src/server.js"]
+    timeout: 30
+    env:
+      WHATNEXT_CLOUD_URL: "https://what-next-production.up.railway.app"
+      WHATNEXT_API_KEY: "your_api_key_here"
+```
+
+Hermes will then have access to the same memory tools on your phone via Telegram.
+
+---
+
 ## Stack
 
 Node.js · SQLite · Postgres · MCP SDK · Railway · macOS LaunchAgent
