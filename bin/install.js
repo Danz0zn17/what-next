@@ -8,11 +8,12 @@
  *   node bin/install.js --client claude --key bak_xxx
  *   node bin/install.js --client vscode  --key bak_xxx
  *   node bin/install.js --client cursor  --key bak_xxx
+ *   node bin/install.js --client openclaw
  *
- * Supported clients: claude, vscode, copilot, cursor, windsurf
+ * Supported clients: claude, vscode, copilot, cursor, windsurf, openclaw
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
@@ -31,6 +32,25 @@ function arg(flag) {
 
 const client = (arg('--client') ?? 'claude').toLowerCase();
 let apiKey = arg('--key');
+
+// ─── OpenClaw: skill installer (no MCP config, no API key needed) ─────────────
+
+if (client === 'openclaw') {
+  const skillSrc = join(ROOT, 'skills/what-next/SKILL.md');
+  const skillDir = join(H, '.openclaw/skills/what-next');
+  const skillDest = join(skillDir, 'SKILL.md');
+  if (!existsSync(skillSrc)) {
+    console.error(`\nSkill file not found: ${skillSrc}\n`);
+    process.exit(1);
+  }
+  mkdirSync(skillDir, { recursive: true });
+  copyFileSync(skillSrc, skillDest);
+  console.log('\nWhat Next skill installed for OpenClaw');
+  console.log(`  Skill: ${skillDest}`);
+  console.log('\nStart a new OpenClaw session and try:');
+  console.log('  /what_next or just ask about a project\n');
+  process.exit(0);
+}
 
 // ─── Config file paths per client per platform ───────────────────────────────
 
@@ -68,7 +88,7 @@ const CONFIG_PATHS = {
 const paths = CONFIG_PATHS[client];
 if (!paths) {
   console.error(`\nUnknown client: "${client}"`);
-  console.error(`Supported: ${Object.keys(CONFIG_PATHS).join(', ')}\n`);
+  console.error(`Supported: ${Object.keys(CONFIG_PATHS).join(', ')}, openclaw\n`);
   process.exit(1);
 }
 

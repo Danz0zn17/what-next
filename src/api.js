@@ -9,12 +9,13 @@
  *   POST /fact          → Store a fact (JSON body)
  *   GET  /search?q=...          → FTS search memories
  *   POST /semantic-search       → Vector/semantic search memories
+ *   GET  /context               → Session-start brief (recent sessions + facts + projects)
  *   GET  /projects              → List all projects
  *   GET  /project/:name         → Get full project history
  */
 
 import { createServer } from 'http';
-import { addSession, addFact, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById } from './db.js';
+import { addSession, addFact, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
 
@@ -634,6 +635,16 @@ export function startApiServer() {
         if (!Array.isArray(conversations)) return send(res, 400, { error: 'Expected an array of conversations' });
         const result = importConversations(conversations);
         return send(res, 200, result);
+      }
+
+      // GET /context — session-start brief (recent sessions + all facts + projects)
+      if (method === 'GET' && url.pathname === '/context') {
+        const [recent, facts, projects] = await Promise.all([
+          Promise.resolve(getRecentSessions(5)),
+          Promise.resolve(getAllFacts()),
+          Promise.resolve(listProjects()),
+        ]);
+        return send(res, 200, { recent_sessions: recent, facts, active_projects: projects });
       }
 
       // GET /projects
