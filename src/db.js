@@ -144,6 +144,25 @@ export function addFact({ project, category, content, tags }) {
 }
 
 // --- Search ---
+export function getRecentSessions(limit = 5) {
+  return db.prepare(`
+    SELECT s.*, p.name as project_name
+    FROM sessions s
+    JOIN projects p ON p.id = s.project_id
+    ORDER BY s.session_date DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+export function getAllFacts() {
+  return db.prepare(`
+    SELECT f.*, p.name as project_name
+    FROM facts f
+    LEFT JOIN projects p ON p.id = f.project_id
+    ORDER BY f.created_at DESC
+  `).all();
+}
+
 export function searchMemories(query, limit = 10) {
   const sessionResults = db.prepare(`
     SELECT s.*, p.name as project_name,
@@ -217,29 +236,31 @@ export function setLastCloudSync(iso) {
 
 // --- Cloud sync upserts (idempotent — skips if cloud_id already exists locally) ---
 export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_was_built, decisions, stack, next_steps, tags, session_date }) {
-  if (!project_name || !summary) return;
+  if (!project_name || !summary) return null;
   if (cloud_id) {
     const exists = db.prepare('SELECT id FROM sessions WHERE cloud_id = ?').get(String(cloud_id));
-    if (exists) return;
+    if (exists) return null;
   }
   const projectId = upsertProject(project_name);
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(projectId, summary, what_was_built ?? null, decisions ?? null, stack ?? null, next_steps ?? null, tags ?? null, session_date ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null);
+  return result.lastInsertRowid;
 }
 
 export function upsertFactFromCloud({ cloud_id, project_name, category, content, tags, created_at }) {
-  if (!category || !content) return;
+  if (!category || !content) return null;
   if (cloud_id) {
     const exists = db.prepare('SELECT id FROM facts WHERE cloud_id = ?').get(String(cloud_id));
-    if (exists) return;
+    if (exists) return null;
   }
   const projectId = project_name ? upsertProject(project_name) : null;
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(projectId, category, content, tags ?? null, created_at ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null);
+  return result.lastInsertRowid;
 }
 
 export default db;

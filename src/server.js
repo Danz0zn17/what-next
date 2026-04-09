@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { addSession, addFact, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById } from './db.js';
+import { addSession, addFact, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';import { syncPending, dumpToGist } from './gist-client.js';
@@ -61,6 +61,65 @@ server.tool(
         text: `Session dumped [${sourceLabel}] (local id: ${id})\nProject: ${args.project}\nSummary: ${args.summary}`,
       }],
     };
+  }
+);
+
+// ─── TOOL: get_context ───────────────────────────────────────────────────────
+server.tool(
+  'get_context',
+  {},
+  async () => {
+    let context;
+    let source = 'cloud';
+
+    if (cloud.isEnabled()) {
+      try {
+        context = await cloud.getContext();
+      } catch (err) {
+        if (!(err instanceof CloudUnavailableError)) throw err;
+        source = 'local';
+      }
+    }
+
+    if (!context) {
+      source = 'local';
+      context = {
+        recent_sessions: getRecentSessions(5),
+        facts: getAllFacts(),
+        active_projects: listProjects(),
+      };
+    }
+
+    const lines = [`## What Next — Session Context [${source}]\n`];
+
+    if (context.active_projects?.length > 0) {
+      lines.push('**Active Projects:**');
+      for (const p of context.active_projects.slice(0, 8)) {
+        const last = (p.last_session ?? '').split('T')[0] || 'never';
+        lines.push(`- **${p.name}** — ${p.session_count} session(s), last active: ${last}`);
+      }
+      lines.push('');
+    }
+
+    if (context.recent_sessions?.length > 0) {
+      lines.push('**Recent Sessions:**');
+      for (const s of context.recent_sessions) {
+        lines.push(`\n[${s.project_name ?? '?'}] ${(s.session_date ?? '').split('T')[0]}`);
+        lines.push(s.summary);
+        if (s.next_steps) lines.push(`→ Next: ${s.next_steps}`);
+      }
+      lines.push('');
+    }
+
+    if (context.facts?.length > 0) {
+      lines.push('**Facts & Preferences:**');
+      for (const f of context.facts) {
+        const scope = f.project_name ? `[${f.project_name}]` : '[global]';
+        lines.push(`${scope} ${f.category}: ${f.content}`);
+      }
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   }
 );
 

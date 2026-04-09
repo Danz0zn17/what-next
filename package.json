@@ -4,6 +4,9 @@
   "description": "What Next — AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
   "type": "module",
   "main": "src/server.js",
+  "bin": {
+    "install-what-next": "bin/install.js"
+  },
   "scripts": {
     "start": "node src/cloud-server.js",
     "mcp": "node src/server.js",

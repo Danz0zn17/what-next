@@ -113,6 +113,10 @@ export async function postFeedback(data) {
   });
 }
 
+export async function getContext() {
+  return fetchCloud('/context');
+}
+
 export async function exportSince(since) {
   const param = since ? `?since=${encodeURIComponent(since)}` : '';
   return fetchCloud(`/export${param}`);

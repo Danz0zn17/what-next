@@ -525,6 +525,31 @@ async function start() {
         return send(res, 200, await searchMemories(user.id, q, limit));
       }
 
+      // GET /context — session-start context brief (recent sessions + all facts + projects)
+      if (method === 'GET' && url.pathname === '/context') {
+        const [{ rows: sessions }, { rows: facts }, { rows: projects }] = await Promise.all([
+          pool.query(`
+            SELECT s.id, p.name AS project_name, s.summary, s.next_steps, s.tags,
+                   s.session_date::TEXT AS session_date
+            FROM sessions s JOIN projects p ON p.id = s.project_id
+            WHERE s.user_id = $1 ORDER BY s.session_date DESC LIMIT 5
+          `, [user.id]),
+          pool.query(`
+            SELECT f.id, f.category, f.content, f.tags, p.name AS project_name
+            FROM facts f LEFT JOIN projects p ON p.id = f.project_id
+            WHERE f.user_id = $1 ORDER BY f.created_at DESC
+          `, [user.id]),
+          pool.query(`
+            SELECT p.name, COUNT(s.id)::INT AS session_count,
+                   MAX(s.session_date)::TEXT AS last_session
+            FROM projects p LEFT JOIN sessions s ON s.project_id = p.id
+            WHERE p.user_id = $1 GROUP BY p.id
+            ORDER BY last_session DESC NULLS LAST LIMIT 10
+          `, [user.id]),
+        ]);
+        return send(res, 200, { recent_sessions: sessions, facts, active_projects: projects });
+      }
+
       // GET /projects
       if (method === 'GET' && url.pathname === '/projects') {
         return send(res, 200, await listProjects(user.id));
