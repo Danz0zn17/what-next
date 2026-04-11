@@ -34,11 +34,27 @@
  *   GET  /project/:name                 — get project + sessions
  *   GET  /export?since=ISO_DATE         — bulk pull for local↔cloud sync
  *   POST /feedback                      — send feedback
+ *   GET  /semantic-search?q=...&limit=N  — vector similarity search
  */
 
 import { createServer } from 'http';
 import pkg from 'pg';
 const { Pool } = pkg;
+import { pipeline } from '@huggingface/transformers';
+
+// ─── Embeddings (lazy-loaded, cached after first use) ─────────────────────────
+let _embedder = null;
+async function getEmbedder() {
+  if (!_embedder) {
+    _embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device: 'cpu' });
+  }
+  return _embedder;
+}
+async function generateEmbedding(text) {
+  const model = await getEmbedder();
+  const out = await model(text.slice(0, 2000), { pooling: 'mean', normalize: true });
+  return Array.from(out.data); // 384-dim float array
+}
 
 const PORT = process.env.PORT ?? 3001;
 const ADMIN_KEY = process.env.ADMIN_KEY;
@@ -202,7 +218,44 @@ async function initSchema() {
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id)');
+
+  // pgvector for semantic search
+  await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS embeddings (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rowtype    TEXT NOT NULL,
+      row_id     INTEGER NOT NULL,
+      embedding  vector(384) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, rowtype, row_id)
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_embeddings_user ON embeddings(user_id)');
+  // IVFFlat index for fast ANN — only worth creating when enough rows exist
+  await pool.query(`
+    DO $$ BEGIN
+      IF (SELECT COUNT(*) FROM embeddings) >= 100 THEN
+        CREATE INDEX IF NOT EXISTS idx_embeddings_ivfflat
+          ON embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 10);
+      END IF;
+    END $$;
+  `).catch(() => {}); // silently skip if pgvector version doesn't support it yet
   log('info', 'Schema ready');
+}
+
+async function storeEmbedding(userId, rowtype, rowId, text) {
+  try {
+    const vec = await generateEmbedding(text);
+    await pool.query(`
+      INSERT INTO embeddings (user_id, rowtype, row_id, embedding)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (user_id, rowtype, row_id) DO UPDATE SET embedding = $4
+    `, [userId, rowtype, rowId, JSON.stringify(vec)]);
+  } catch (err) {
+    log('warn', 'Embedding generation failed', { err: err.message });
+  }
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -243,18 +296,23 @@ async function addSession(userId, { project, summary, what_was_built, decisions,
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING id
   `, [userId, projectId, cap(summary, 4000), cap(what_was_built, 8000), cap(decisions, 4000), cap(stack, 1000), cap(next_steps, 4000), cap(tags, 500)]);
-  return rows[0].id;
+  const id = rows[0].id;
+  const embText = [summary, what_was_built, decisions, next_steps, tags].filter(Boolean).join(' ');
+  storeEmbedding(userId, 'session', id, embText); // fire and forget
+  return id;
 }
 
 async function addFact(userId, { category, content, project, tags }) {
-  let projectId = null;
+  let projectId = null; // resolved below
   if (project) projectId = await upsertProject(userId, cap(project, 100));
   const { rows } = await pool.query(`
     INSERT INTO facts (user_id, project_id, category, content, tags)
     VALUES ($1, $2, $3, $4, $5)
     RETURNING id
   `, [userId, projectId, cap(category, 200), cap(content, 4000), cap(tags, 500)]);
-  return rows[0].id;
+  const id = rows[0].id;
+  storeEmbedding(userId, 'fact', id, [category, content, tags].filter(Boolean).join(' ')); // fire and forget
+  return id;
 }
 
 async function searchMemories(userId, q, limit = 10) {
@@ -593,6 +651,32 @@ async function start() {
         if (!q) return send(res, 400, { error: 'q parameter required' });
         const limit = parseInt(url.searchParams.get('limit') ?? '10');
         return send(res, 200, await searchMemories(user.id, q, limit));
+      }
+
+      // GET /semantic-search?q=...&limit=N
+      if (method === 'GET' && url.pathname === '/semantic-search') {
+        const q = url.searchParams.get('q');
+        if (!q) return send(res, 400, { error: 'q parameter required' });
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10'), 50);
+        try {
+          const vec = await generateEmbedding(q);
+          const { rows } = await pool.query(`
+            SELECT e.rowtype, e.row_id,
+                   1 - (e.embedding <=> $3::vector) AS score,
+                   CASE e.rowtype
+                     WHEN 'session' THEN (SELECT s.summary FROM sessions s WHERE s.id = e.row_id AND s.user_id = $1)
+                     WHEN 'fact'    THEN (SELECT f.content FROM facts    f WHERE f.id = e.row_id AND f.user_id = $1)
+                   END AS text
+            FROM embeddings e
+            WHERE e.user_id = $1
+            ORDER BY e.embedding <=> $3::vector
+            LIMIT $2
+          `, [user.id, limit, JSON.stringify(vec)]);
+          return send(res, 200, { results: rows.filter(r => r.text) });
+        } catch (err) {
+          log('error', 'semantic-search error', { err: err.message });
+          return send(res, 500, { error: 'Semantic search unavailable' });
+        }
       }
 
       // GET /context — session-start context brief (recent sessions + all facts + projects)
