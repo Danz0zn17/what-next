@@ -9,9 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **Cross-platform CI baseline** — GitHub Actions workflow now runs baseline checks/tests so changes are validated before merge (`df89d44`).
+- **Hybrid search (RRF)** — `GET /hybrid-search?q=` merges FTS5 keyword rankings with local cosine similarity using Reciprocal Rank Fusion; `rrf_score` returned per result.
+- **Edit session** — `PATCH /session/:id` (local and cloud) lets AI tools correct or extend an existing session without creating a duplicate.
+- **What's next** — `GET /whats-next` returns the most recent open `next_steps` per project; available as `whats_next` MCP tool and cloud endpoint.
+- **Sync status** — `GET /sync/status` returns `last_cloud_sync` timestamp and pending gist count for self-diagnosis.
+- **`edit_session` MCP tool** — update any field on an existing session; automatically refreshes local FTS5 index and embedding.
+- **`whats_next` MCP tool** — surfaces open action items across all projects in one call; available in Claude, Copilot, and Hermes.
 
 ### Changed
 - **Windows onboarding improved** — README and installer now include first-class Windows setup, PowerShell examples, and platform-specific guidance (`ad7a629`).
+- **CORS** — local and cloud APIs now allow PATCH method.
 
 ### Testing
 - Baseline test coverage added for core cross-platform/config/update-check behavior (`df89d44`).

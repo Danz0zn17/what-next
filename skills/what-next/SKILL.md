@@ -58,6 +58,26 @@ curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/fact" \
 curl -s "http://localhost:${WHATNEXT_PORT:-3747}/project/PROJECT-NAME"
 ```
 
+**To see open action items** — What to work on next across all projects:
+
+```bash
+curl -s "http://localhost:${WHATNEXT_PORT:-3747}/whats-next"
+```
+
+**To search with hybrid ranking** — Better than plain keyword search (FTS5 + semantic RRF):
+
+```bash
+curl -s "http://localhost:${WHATNEXT_PORT:-3747}/hybrid-search?q=QUERY&limit=5"
+```
+
+**To edit an existing session** — Correct or extend a previously saved session:
+
+```bash
+curl -s -X PATCH "http://localhost:${WHATNEXT_PORT:-3747}/session/SESSION_ID" \
+  -H 'Content-Type: application/json' \
+  -d '{"next_steps": "updated next steps"}'
+```
+
 ## Field reference
 
 `POST /session`:
