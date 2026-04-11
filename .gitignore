@@ -8,3 +8,6 @@ RETROSPECTIVE.md
 cloud-server/
 agent-blue-setup/
 .claude/
+
+# Local Netlify folder
+.netlify

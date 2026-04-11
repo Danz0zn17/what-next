@@ -93,6 +93,18 @@ process.on('unhandledRejection', (err) => {
   sendTelegramAlert(`[What Next Cloud] Unhandled rejection: ${msg}`);
 });
 
+// ─── FTS query sanitiser ──────────────────────────────────────────────────────
+// Postgres to_tsquery crashes on special characters like : ( ) & | ! @
+// Sanitise the query before passing it to avoid 500s on user input.
+function safeTsQuery(q) {
+  // Strip anything that isn't alphanumeric, whitespace, or hyphen
+  const cleaned = q.replace(/[^a-zA-Z0-9\s\-]/g, ' ').trim();
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (!words.length) return null;
+  // Join as AND query (all words must appear)
+  return words.map(w => w + ':*').join(' & ');
+}
+
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 async function initSchema() {
@@ -229,7 +241,9 @@ async function addFact(userId, { category, content, project, tags }) {
 }
 
 async function searchMemories(userId, q, limit = 10) {
-  const term = q.split(/\s+/).filter(Boolean).join(' & ');
+  const term = safeTsQuery(q);
+  if (!term) return { sessions: [], facts: [] };
+
   const { rows: sessions } = await pool.query(`
     SELECT s.id, p.name AS project_name, s.summary, s.what_was_built,
            s.decisions, s.stack, s.next_steps, s.tags,
@@ -407,6 +421,11 @@ async function start() {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const method = req.method;
 
+    // Security headers on every response
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+
     // CORS
     if (method === 'OPTIONS') {
       res.writeHead(204, {
@@ -501,6 +520,37 @@ async function start() {
         return send(res, 201, { id: rows[0].id, message: 'Feedback received — thank you' });
       }
 
+      // GET /user — current user profile
+      if (method === 'GET' && url.pathname === '/user') {
+        const { rows: [stats] } = await pool.query(`
+          SELECT
+            (SELECT COUNT(*)::INT FROM sessions WHERE user_id = $1) AS total_sessions,
+            (SELECT COUNT(*)::INT FROM facts    WHERE user_id = $1) AS total_facts,
+            (SELECT COUNT(*)::INT FROM projects WHERE user_id = $1) AS total_projects
+        `, [user.id]);
+        return send(res, 200, {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          plan: user.plan,
+          created_at: user.created_at,
+          ...stats,
+        });
+      }
+
+      // GET /stats — quick summary counts
+      if (method === 'GET' && url.pathname === '/stats') {
+        const { rows: [counts] } = await pool.query(`
+          SELECT
+            (SELECT COUNT(*)::INT FROM sessions WHERE user_id = $1) AS sessions,
+            (SELECT COUNT(*)::INT FROM facts    WHERE user_id = $1) AS facts,
+            (SELECT COUNT(*)::INT FROM projects WHERE user_id = $1) AS projects,
+            (SELECT MIN(session_date)::TEXT FROM sessions WHERE user_id = $1) AS first_session,
+            (SELECT MAX(session_date)::TEXT FROM sessions WHERE user_id = $1) AS last_session
+        `, [user.id]);
+        return send(res, 200, counts);
+      }
+
       // POST /session
       if (method === 'POST' && url.pathname === '/session') {
         const body = await parseBody(req);
@@ -585,6 +635,18 @@ async function start() {
           ORDER BY f.created_at ASC
         `, [user.id, since]);
         return send(res, 200, { sessions, facts, exported_at: new Date().toISOString() });
+      }
+
+      // DELETE /session/:id — user deletes one of their own sessions
+      const deleteSessionMatch = url.pathname.match(/^\/session\/(\d+)$/);
+      if (method === 'DELETE' && deleteSessionMatch) {
+        const sessionId = parseInt(deleteSessionMatch[1], 10);
+        const { rowCount } = await pool.query(
+          'DELETE FROM sessions WHERE id = $1 AND user_id = $2',
+          [sessionId, user.id]
+        );
+        if (!rowCount) return send(res, 404, { error: 'Session not found or not yours' });
+        return send(res, 200, { ok: true });
       }
 
       send(res, 404, { error: 'Not found' });
