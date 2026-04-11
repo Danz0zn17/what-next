@@ -854,6 +854,77 @@
       .surfaces   { grid-template-columns: repeat(2, 1fr); }
       .hero-stats { flex-direction: column; max-width: 100%; }
     }
+
+    /* ══════ COMPARISON ══════ */
+    .compare {
+      padding: 100px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .compare h2 {
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      font-weight: 400;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      margin-bottom: 18px;
+    }
+
+    .compare-desc {
+      font-size: 17px;
+      color: var(--text-2);
+      max-width: 580px;
+      line-height: 1.75;
+      margin-bottom: 48px;
+    }
+
+    .compare-table {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .compare-table th,
+    .compare-table td {
+      padding: 15px 20px;
+      font-size: 14px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+
+    .compare-table th {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      background: var(--bg-1);
+    }
+
+    .compare-table th.ours-header {
+      background: rgba(99,102,241,0.08);
+      color: var(--accent-light);
+    }
+
+    .compare-table td:first-child { color: var(--text-2); }
+
+    .compare-table td.yes {
+      color: var(--green);
+      font-weight: 500;
+    }
+
+    .compare-table td.no { color: var(--text-3); }
+
+    .compare-table td.ours { background: rgba(99,102,241,0.03); }
+
+    .compare-table tr:last-child td { border-bottom: none; }
+
+    @media (max-width: 800px) {
+      .compare-table th:last-child,
+      .compare-table td:last-child { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -900,7 +971,7 @@
       </div>
       <div class="hero-stats">
         <div class="hero-stat">
-          <div class="stat-num">4</div>
+          <div class="stat-num">5</div>
           <div class="stat-label">AI surfaces connected</div>
         </div>
         <div class="hero-stat">
@@ -1130,6 +1201,65 @@
           <div><span style="color:#2a2a2a">}</span></div>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARISON -->
+<section class="compare" id="compare">
+  <div class="container">
+    <div class="reveal">
+      <div class="label">Why What Next</div>
+      <h2>Not generic memory.<br><em>Developer memory.</em></h2>
+      <p class="compare-desc">Tools like Supermemory passively harvest everything you say. What Next only saves what you explicitly tell it to &mdash; decisions, stack choices, next steps &mdash; and syncs that context across every surface you work on.</p>
+    </div>
+    <div class="reveal" style="transition-delay:0.08s;overflow-x:auto">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th style="width:38%">Feature</th>
+            <th class="ours-header">What Next</th>
+            <th>Generic memory tools</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>What gets remembered</td>
+            <td class="yes ours">You decide. Explicit saves only.</td>
+            <td class="no">Passive, ambient extraction</td>
+          </tr>
+          <tr>
+            <td>Data location</td>
+            <td class="yes ours">Your machine + optional cloud sync</td>
+            <td class="no">Their cloud, always</td>
+          </tr>
+          <tr>
+            <td>Protocol</td>
+            <td class="yes ours">MCP (open standard)</td>
+            <td class="no">Proprietary plugins</td>
+          </tr>
+          <tr>
+            <td>Telegram support</td>
+            <td class="yes ours">Native &mdash; memory follows you to mobile</td>
+            <td class="no">Not supported</td>
+          </tr>
+          <tr>
+            <td>Code session awareness</td>
+            <td class="yes ours">Decisions, stack, next steps per session</td>
+            <td class="no">General note storage only</td>
+          </tr>
+          <tr>
+            <td>Tech radar &amp; self-improvement</td>
+            <td class="yes ours">Daily AI news &rarr; Telegram &rarr; implement</td>
+            <td class="no">Not available</td>
+          </tr>
+          <tr>
+            <td>Self-hosted (no account needed)</td>
+            <td class="yes ours">Always</td>
+            <td class="no">Paid tier only</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </section>

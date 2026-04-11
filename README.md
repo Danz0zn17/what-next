@@ -85,6 +85,7 @@ Once connected, your AI can use these tools automatically:
 
 | Tool | What it does |
 |---|---|
+| `get_context` | **Start here.** One call returns all projects, recent sessions, and facts — a full brain dump at session start |
 | `dump_session` | Save a summary of the current session — what was built, decisions made, next steps |
 | `get_project` | Load full history for a project — all prior sessions in one call |
 | `list_projects` | See all known projects with session counts and last activity |
@@ -123,6 +124,24 @@ It handles the rest.
 - Check your Internet connection
 - The local SQLite still works offline — it'll sync next time
 
+**`search_memories` crashes or returns nothing for certain queries**
+- Postgres full-text search rejects special characters like `:`, `(`, `)`, `!`, `@`
+- This is handled automatically server-side since v0.1.1 — update to the latest version
+- Workaround on older versions: use plain words without punctuation in search queries
+
+**Hermes reads files and gets "Resource deadlock avoided" (macOS only)**
+- macOS can deadlock PTY-based subprocess reads on certain `.md` files
+- Fixed in `file_operations.py` since v0.1.1 — native Python reads are used first, shell only as fallback
+- If still occurring, restart the Hermes gateway: `launchctl stop ai.hermes.gateway && launchctl start ai.hermes.gateway`
+
+**Cloud health check**
+```bash
+curl https://what-next-production.up.railway.app/health
+# → {"ok":true,"service":"what-next-cloud"}
+curl -H "x-api-key: your_key" https://what-next-production.up.railway.app/stats
+# → {"sessions":N,"facts":N,"projects":N,...}
+```
+
 ---
 
 ## Optional: Hermes (Telegram Bot)
@@ -141,6 +160,26 @@ mcp_servers:
 ```
 
 Hermes will then have access to the same memory tools on your phone via Telegram.
+
+**Tech Radar (Hermes optional feature)**
+
+What Next ships with a daily tech radar cron job for Hermes. Every morning at 06:00 it scans Hacker News, Reddit r/LocalLLaMA, and r/MachineLearning for AI/MCP/agent news, sends a Telegram digest, and lets you reply "implement 1" to auto-apply a suggestion.
+
+To enable, add the job to `~/.hermes/cron/jobs.json`:
+
+```json
+[
+  {
+    "id": "tech-radar-daily",
+    "name": "Daily Tech Radar",
+    "prompt": "Run the tech-radar skill: scan HN + Reddit for AI/MCP/agent news, score relevance, send a 3-item Telegram digest with implement hooks.",
+    "schedule": "0 6 * * *",
+    "deliver": "origin",
+    "enabled": true,
+    "created_at": "2026-04-11T07:00:00Z"
+  }
+]
+```
 
 ---
 

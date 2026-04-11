@@ -13,16 +13,27 @@
  *
  * Optional:
  *   PORT                — defaults to 3001 (Railway sets this automatically)
+ *   TELEGRAM_ALERT_URL  — Telegram sendMessage URL for error alerts
  *
- * Endpoints (all require X-API-Key except noted):
- *   GET  /health                        — public
+ * Public endpoints:
+ *   GET  /health                        — liveness check
+ *   POST /webhooks/beta-signup          — Netlify form webhook (WEBHOOK_SECRET)
+ *
+ * Admin endpoints (X-Admin-Key required):
+ *   POST /admin/users                   — create user + issue API key
+ *
+ * Authenticated endpoints (X-API-Key required):
+ *   GET  /user                          — current user profile + stats
+ *   GET  /stats                         — session/fact/project counts
  *   POST /session                       — dump a session
+ *   DELETE /session/:id                 — delete own session
  *   POST /fact                          — store a fact
- *   GET  /search?q=...                  — full-text search
+ *   GET  /search?q=...&limit=N          — full-text search
+ *   GET  /context                       — session-start brief
  *   GET  /projects                      — list projects
  *   GET  /project/:name                 — get project + sessions
- *   POST /admin/users                   — create user + issue key  (ADMIN_KEY)
- *   POST /webhooks/beta-signup          — Netlify form webhook (WEBHOOK_SECRET)
+ *   GET  /export?since=ISO_DATE         — bulk pull for local↔cloud sync
+ *   POST /feedback                      — send feedback
  */
 
 import { createServer } from 'http';
@@ -37,7 +48,7 @@ const RESEND_FROM = process.env.RESEND_FROM ?? 'What Next <noreply@whatnextai.co
 const TELEGRAM_ALERT_URL = process.env.TELEGRAM_ALERT_URL; // optional: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text=
 
 if (!process.env.DATABASE_URL) {
-  process.stderr.write('[cloud] DATABASE_URL is required\n');
+  log('fatal', 'DATABASE_URL is required');
   process.exit(1);
 }
 
@@ -66,6 +77,12 @@ setInterval(() => {
   for (const [ip, entry] of rateLimitMap) if (now > entry.reset + 60_000) rateLimitMap.delete(ip);
 }, 5 * 60_000);
 
+// ─── Structured logging ───────────────────────────────────────────────────────
+function log(level, msg, meta = {}) {
+  const line = JSON.stringify({ ts: new Date().toISOString(), level, msg, ...meta });
+  process.stderr.write(line + '\n');
+}
+
 // ─── Self-healing: error tracking + Telegram alert ────────────────────────────
 let recentErrors = [];
 const ERROR_THRESHOLD = 5; // alert after this many errors in 5 minutes
@@ -89,7 +106,7 @@ function sendTelegramAlert(text) {
 // Alert on process crash (unhandled rejection)
 process.on('unhandledRejection', (err) => {
   const msg = err?.message ?? String(err);
-  process.stderr.write(`[cloud] Unhandled rejection: ${msg}\n`);
+  log('error', 'Unhandled rejection', { err: msg });
   sendTelegramAlert(`[What Next Cloud] Unhandled rejection: ${msg}`);
 });
 
@@ -117,7 +134,7 @@ async function initSchema() {
       AND column_name = 'user_id'
   `);
   if (rows[0].cnt < 3) {
-    process.stderr.write('[cloud] Migrating: old schema detected — rebuilding\n');
+    log('warn', 'Old schema detected — rebuilding');
     await pool.query('DROP TABLE IF EXISTS facts CASCADE');
     await pool.query('DROP TABLE IF EXISTS sessions CASCADE');
     await pool.query('DROP TABLE IF EXISTS projects CASCADE');
@@ -185,7 +202,7 @@ async function initSchema() {
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id)');
-  process.stderr.write('[cloud] Schema ready\n');
+  log('info', 'Schema ready');
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -313,7 +330,7 @@ async function createUser({ email, name, plan = 'beta' }) {
 
 async function sendWelcomeEmail({ name, email, apiKey }) {
   if (!RESEND_API_KEY) {
-    process.stderr.write(`[cloud] RESEND_API_KEY not set — skipping email to ${email}\n`);
+    log('warn', 'RESEND_API_KEY not set — skipping email', { email });
     return;
   }
 
@@ -377,9 +394,9 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
 
   if (!res.ok) {
     const err = await res.text();
-    process.stderr.write(`[cloud] Resend error: ${err}\n`);
+    log('error', 'Resend email failed', { email, err });
   } else {
-    process.stderr.write(`[cloud] Welcome email sent to ${email}\n`);
+    log('info', 'Welcome email sent', { email });
   }
 }
 
@@ -469,16 +486,16 @@ async function start() {
         // Check if already exists (idempotent)
         const existing = await pool.query('SELECT api_key FROM users WHERE email = $1', [email.toLowerCase().trim()]);
         if (existing.rows.length) {
-          process.stderr.write(`[cloud] Signup webhook: user ${email} already exists, skipping\n`);
-          return send(res, 200, { ok: true, note: 'already exists' });
-        }
+        log('info', 'Webhook: user already exists', { email });
+        return send(res, 200, { ok: true, note: 'already exists' });
+      }
 
         const user = await createUser({ email, name });
         await sendWelcomeEmail({ name, email, apiKey: user.api_key });
-        process.stderr.write(`[cloud] New beta user: ${email}\n`);
+        log('info', 'New beta user created', { email });
         return send(res, 201, { ok: true });
       } catch (err) {
-        process.stderr.write(`[cloud] Webhook error: ${err.message}\n`);
+        log('error', 'Webhook error', { err: err.message });
         return send(res, 500, { error: err.message });
       }
     }
@@ -497,7 +514,7 @@ async function start() {
         return send(res, 201, user);
       } catch (err) {
         if (err.code === '23505') return send(res, 409, { error: 'User with this email already exists' });
-        process.stderr.write(`[cloud] Admin create user error: ${err.message}\n`);
+        log('error', 'Admin create user error', { err: err.message });
         return send(res, 500, { error: err.message });
       }
     }
@@ -516,7 +533,7 @@ async function start() {
           INSERT INTO feedback (user_id, type, message, context)
           VALUES ($1, $2, $3, $4) RETURNING id
         `, [user.id, body.type ?? 'general', body.message, body.context ?? null]);
-        process.stderr.write(`[cloud] Feedback from ${user.email}: ${body.message.slice(0, 80)}\n`);
+        log('info', 'Feedback received', { user: user.email, preview: body.message.slice(0, 80) });
         return send(res, 201, { id: rows[0].id, message: 'Feedback received — thank you' });
       }
 
@@ -652,18 +669,18 @@ async function start() {
       send(res, 404, { error: 'Not found' });
     } catch (err) {
       const status = err.statusCode ?? 500;
-      process.stderr.write(`[cloud] Request error: ${err.message}\n`);
+      log('error', 'Request error', { method, path: url.pathname, status, err: err.message });
       if (status === 500) trackError(err.message);
       send(res, status, { error: status === 413 ? 'Request body too large' : 'Internal server error' });
     }
   });
 
   server.listen(PORT, () => {
-    process.stderr.write(`[cloud] What Next cloud server running on port ${PORT}\n`);
+    log('info', 'What Next cloud server started', { port: PORT });
   });
 }
 
 start().catch(err => {
-  process.stderr.write(`[cloud] Fatal: ${err.message}\n`);
+  log('fatal', 'Server failed to start', { err: err.message });
   process.exit(1);
 });
