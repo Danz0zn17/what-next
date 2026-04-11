@@ -1,5 +1,12 @@
 # What Next
 
+> Persistent memory for AI, delivered over MCP.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-6366f1.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/protocol-MCP-818cf8.svg)](https://modelcontextprotocol.io)
+[![Railway](https://img.shields.io/badge/cloud-Railway-0B0D0E.svg)](https://railway.app)
+[![whatnextai.co.za](https://img.shields.io/badge/site-whatnextai.co.za-22c55e.svg)](https://whatnextai.co.za)
+
 **Your AI second brain.** What Next keeps context across every AI tool you use. When you start a new conversation — in Claude, VS Code Copilot, or anywhere else — it already knows what you were building, what decisions you made, and what comes next.
 
 No more copy-pasting context. No more re-explaining your stack. It just knows.
