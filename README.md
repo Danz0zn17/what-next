@@ -15,7 +15,7 @@ No more copy-pasting context. No more re-explaining your stack. It just knows.
 
 ## How It Works
 
-What Next runs a local MCP server on your Mac. Every AI tool connects to it. When you finish a session, your AI dumps a summary. When you start a new one, it loads it back. All of it synced to the cloud so your memory is safe even if your machine dies.
+What Next runs a local MCP server on your machine (macOS, Windows, or Linux). Every AI tool connects to it. When you finish a session, your AI dumps a summary. When you start a new one, it loads it back. All of it synced to the cloud so your memory is safe even if your machine dies.
 
 ```
 Your AI tools  ──MCP──►  What Next (local)  ──HTTPS──►  Cloud (Railway)
@@ -27,8 +27,8 @@ Your AI tools  ──MCP──►  What Next (local)  ──HTTPS──►  Clou
 
 ## Prerequisites
 
-- **macOS** (Apple Silicon or Intel — tested on macOS 14+)
-- **Node.js 20+** — install via [nodejs.org](https://nodejs.org) or `brew install node`
+- **macOS, Windows, or Linux**
+- **Node.js 20+** — install via [nodejs.org](https://nodejs.org)
 - **Claude Desktop** and/or **VS Code with GitHub Copilot** — at least one AI surface
 
 ---
@@ -37,12 +37,30 @@ Your AI tools  ──MCP──►  What Next (local)  ──HTTPS──►  Clou
 
 **1. Clone the repo**
 
+macOS / Linux:
+
 ```bash
 git clone https://github.com/Danz0zn17/what-next.git ~/what-next
 cd ~/what-next && npm install
 ```
 
-**2. Add to Claude Desktop**
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/Danz0zn17/what-next.git "$env:USERPROFILE\what-next"
+cd "$env:USERPROFILE\what-next"
+npm install
+```
+
+**2. Recommended: run the installer (all platforms)**
+
+```bash
+node bin/install.js --client vscode --key bak_xxx
+```
+
+The installer writes the correct MCP config path for your OS automatically.
+
+**3. Add to Claude Desktop (manual option)**
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -61,7 +79,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-**3. Add to VS Code / GitHub Copilot**
+**4. Add to VS Code / GitHub Copilot (manual option)**
 
 Edit `~/Library/Application Support/Code/User/mcp.json`:
 
@@ -80,7 +98,7 @@ Edit `~/Library/Application Support/Code/User/mcp.json`:
 }
 ```
 
-**4. Restart Claude Desktop / VS Code**
+**5. Restart Claude Desktop / VS Code**
 
 What Next will appear as an available MCP tool. You'll see tools like `dump_session`, `get_project`, `search_memories` in your AI's tool list.
 
@@ -122,6 +140,7 @@ It handles the rest.
 - Restart the app after editing the config
 - Check the path: `~/what-next/src/server.js` — if you cloned somewhere else, update the path
 - Make sure `WHATNEXT_API_KEY` is set to your key (from the welcome email)
+- On Windows, use an absolute path like `C:\Users\<you>\what-next\src\server.js`
 
 **"Invalid or missing API key" errors**
 - Your API key is wrong or missing from the config env block
@@ -148,7 +167,15 @@ curl http://localhost:3747/health
 curl http://localhost:3747/context
 # → recent sessions + facts (same as MCP get_context)
 ```
-If the local service is down: `launchctl start com.whatnextai.api`
+If the local service is down:
+- macOS: `launchctl start com.whatnextai.api`
+- Windows PowerShell: `node "$env:USERPROFILE\what-next\src\api-server.js"`
+- Linux: `node ~/what-next/src/api-server.js`
+
+For always-on local API on Windows, create a Task Scheduler task that runs:
+- Program/script: `node`
+- Add arguments: `C:\Users\<you>\what-next\src\api-server.js`
+- Trigger: At log on
 
 **Cloud health check**
 ```bash
@@ -209,5 +236,5 @@ All data is isolated to your API key and stored in a private Postgres database o
 
 ## Stack
 
-Node.js · SQLite · Postgres · MCP SDK · Railway · macOS LaunchAgent
+Node.js · SQLite · Postgres · MCP SDK · Railway · LaunchAgent (macOS) / Task Scheduler (Windows) / systemd (Linux optional)
 

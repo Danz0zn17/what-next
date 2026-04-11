@@ -156,3 +156,20 @@ console.log('\nRestart your AI tool, then try:');
 console.log('  get_context');
 console.log('  dump_session');
 console.log('  search_memories "your query"\n');
+
+if (platform === 'win32') {
+  const apiPath = join(ROOT, 'src/api-server.js').replace(/\\/g, '\\\\');
+  console.log('Windows tip (optional local web UI/API):');
+  console.log(`  node "${apiPath}"`);
+  console.log('To keep it always-on, create a Task Scheduler task:');
+  console.log('  Program/script: node');
+  console.log(`  Add arguments: ${apiPath}\n`);
+} else if (platform === 'darwin') {
+  console.log('macOS tip (optional local web UI/API):');
+  console.log('  launchctl start com.whatnextai.api\n');
+} else {
+  const apiPath = join(ROOT, 'src/api-server.js');
+  console.log('Linux tip (optional local web UI/API):');
+  console.log(`  node ${apiPath}`);
+  console.log('For always-on, run it via a user systemd service.\n');
+}
