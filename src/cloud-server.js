@@ -353,7 +353,7 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
     git clone https://github.com/Danz0zn17/what-next.git ~/what-next<br>
     cd ~/what-next && npm install
   </div>
-  <p style="color:#888;line-height:1.75;margin-bottom:12px">Full setup guide and tool reference: <a href="https://github.com/Danz0zn17/what-next#readme" style="color:#f0f0f0">github.com/Danz0zn17/what-next</a></p>
+  <p style="color:#888;line-height:1.75;margin-bottom:12px">Full setup guide and tool reference: <a href="https://whatnextai.co.za" style="color:#f0f0f0">whatnextai.co.za</a></p>
   <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">2. Add to Claude Desktop</strong> — edit <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">~/Library/Application Support/Claude/claude_desktop_config.json</code></p>
   <div style="background:#0c0c0c;border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:14px 18px;font-family:monospace;font-size:12px;margin-bottom:16px;color:#888;line-height:1.9">
     "mcpServers": {<br>
@@ -369,7 +369,7 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
   </div>
   <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">3. Add to VS Code / GitHub Copilot</strong> — same config in <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">~/Library/Application Support/Code/User/mcp.json</code> using <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">"servers"</code> instead of <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">"mcpServers"</code></p>
   <p style="color:#888;line-height:1.75;margin-bottom:32px"><strong style="color:#f0f0f0">4. Restart Claude / VS Code</strong> — What Next will appear as an available tool.</p>
-  <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">Bonus: Telegram</strong> — If you use <a href="https://github.com/Danz0zn17/hermes" style="color:#818cf8">Hermes</a> as your AI bot on Telegram, What Next works there too. Your memory follows you to your phone — same context, same tools, everywhere.</p>
+  <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">Bonus: Telegram</strong> — If you use Hermes as your AI bot on Telegram, What Next works there too. Your memory follows you to your phone — same context, same tools, everywhere.</p>
   <p style="color:#888;line-height:1.75;margin-bottom:8px">If anything breaks, reply to this email directly. This is a real beta — your feedback shapes what gets built next.</p>
   <p style="color:#888;line-height:1.75;margin-bottom:28px">You can also send feedback directly from your AI: just ask it to <em>send feedback to What Next</em> — it'll use the <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">send_feedback</code> tool.</p>
   <p style="font-size:13px;color:#444;line-height:1.75;margin-bottom:28px;padding:16px;border:1px solid rgba(255,255,255,0.05);border-radius:6px"><strong style="color:#666">What data is stored:</strong> Only what your AI explicitly saves — session summaries, facts, and any feedback you choose to send. No passive telemetry, no error snooping, no tracking. Your data is isolated to your API key and is never shared. You can ask me to delete it at any time.</p>
