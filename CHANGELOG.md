@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Cross-platform CI baseline** — GitHub Actions workflow now runs baseline checks/tests so changes are validated before merge (`df89d44`).
+
+### Changed
+- **Windows onboarding improved** — README and installer now include first-class Windows setup, PowerShell examples, and platform-specific guidance (`ad7a629`).
+
+### Testing
+- Baseline test coverage added for core cross-platform/config/update-check behavior (`df89d44`).
+
+---
+
 ## [1.1.0] — 2026-04-11
 
 ### Added
