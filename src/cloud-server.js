@@ -369,6 +369,7 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
   </div>
   <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">3. Add to VS Code / GitHub Copilot</strong> — same config in <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">~/Library/Application Support/Code/User/mcp.json</code> using <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">"servers"</code> instead of <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">"mcpServers"</code></p>
   <p style="color:#888;line-height:1.75;margin-bottom:32px"><strong style="color:#f0f0f0">4. Restart Claude / VS Code</strong> — What Next will appear as an available tool.</p>
+  <p style="color:#888;line-height:1.75;margin-bottom:12px"><strong style="color:#f0f0f0">Bonus: Telegram</strong> — If you use <a href="https://github.com/Danz0zn17/hermes" style="color:#818cf8">Hermes</a> as your AI bot on Telegram, What Next works there too. Your memory follows you to your phone — same context, same tools, everywhere.</p>
   <p style="color:#888;line-height:1.75;margin-bottom:8px">If anything breaks, reply to this email directly. This is a real beta — your feedback shapes what gets built next.</p>
   <p style="color:#888;line-height:1.75;margin-bottom:28px">You can also send feedback directly from your AI: just ask it to <em>send feedback to What Next</em> — it'll use the <code style="background:#1a1a1a;padding:2px 6px;border-radius:3px">send_feedback</code> tool.</p>
   <p style="font-size:13px;color:#444;line-height:1.75;margin-bottom:28px;padding:16px;border:1px solid rgba(255,255,255,0.05);border-radius:6px"><strong style="color:#666">What data is stored:</strong> Only what your AI explicitly saves — session summaries, facts, and any feedback you choose to send. No passive telemetry, no error snooping, no tracking. Your data is isolated to your API key and is never shared. You can ask me to delete it at any time.</p>
@@ -493,6 +494,7 @@ async function start() {
         const user = await createUser({ email, name });
         await sendWelcomeEmail({ name, email, apiKey: user.api_key });
         log('info', 'New beta user created', { email });
+        sendTelegramAlert(`New What Next signup: ${name ? name + ' ' : ''}(${email})`);
         return send(res, 201, { ok: true });
       } catch (err) {
         log('error', 'Webhook error', { err: err.message });
@@ -528,6 +530,7 @@ async function start() {
       // POST /feedback
       if (method === 'POST' && url.pathname === '/feedback') {
         const body = await parseBody(req);
+        sendTelegramAlert(`What Next feedback from ${user.email}: ${String(body.message ?? body.content ?? JSON.stringify(body)).slice(0, 200)}`);
         if (!body.message) return send(res, 400, { error: 'message is required' });
         const { rows } = await pool.query(`
           INSERT INTO feedback (user_id, type, message, context)
