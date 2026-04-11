@@ -44,7 +44,7 @@ const PORT = process.env.PORT ?? 3001;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const RESEND_FROM = process.env.RESEND_FROM ?? 'What Next <noreply@whatnextai.co.za>';
+const RESEND_FROM = process.env.RESEND_FROM ?? 'What Next <noreply@greenberries.co.za>';
 const TELEGRAM_ALERT_URL = process.env.TELEGRAM_ALERT_URL; // optional: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text=
 
 if (!process.env.DATABASE_URL) {
