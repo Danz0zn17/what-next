@@ -17,25 +17,27 @@ function joinForPlatform(platform, ...parts) {
   return path.posix.join(...parts);
 }
 
-export function resolveConfigPath(client, platform, homeDir, appDataEnv) {
+export function resolveConfigPath(client, platform, homeDir, appDataEnv, xdgConfigHomeEnv) {
   if (!isSupportedClient(client)) return null;
 
   const appData = appDataEnv ?? joinForPlatform('win32', homeDir, 'AppData', 'Roaming');
+  // Respect XDG_CONFIG_HOME on Linux (and anywhere it's set)
+  const xdgConfig = xdgConfigHomeEnv ?? joinForPlatform('linux', homeDir, '.config');
 
   const configPaths = {
     claude: {
       darwin: joinForPlatform('darwin', homeDir, 'Library/Application Support/Claude/claude_desktop_config.json'),
-      linux: joinForPlatform('linux', homeDir, '.config/Claude/claude_desktop_config.json'),
+      linux: joinForPlatform('linux', xdgConfig, 'Claude/claude_desktop_config.json'),
       win32: joinForPlatform('win32', appData, 'Claude/claude_desktop_config.json'),
     },
     vscode: {
       darwin: joinForPlatform('darwin', homeDir, 'Library/Application Support/Code/User/mcp.json'),
-      linux: joinForPlatform('linux', homeDir, '.config/Code/User/mcp.json'),
+      linux: joinForPlatform('linux', xdgConfig, 'Code/User/mcp.json'),
       win32: joinForPlatform('win32', appData, 'Code/User/mcp.json'),
     },
     copilot: {
       darwin: joinForPlatform('darwin', homeDir, 'Library/Application Support/Code/User/mcp.json'),
-      linux: joinForPlatform('linux', homeDir, '.config/Code/User/mcp.json'),
+      linux: joinForPlatform('linux', xdgConfig, 'Code/User/mcp.json'),
       win32: joinForPlatform('win32', appData, 'Code/User/mcp.json'),
     },
     cursor: {

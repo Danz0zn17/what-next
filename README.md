@@ -139,10 +139,21 @@ It handles the rest.
 ## Troubleshooting
 
 **Tools don't appear in Claude/VS Code**
-- Restart the app after editing the config
+- Restart the app completely after running the installer — MCP config is only read at startup
 - Check the path: `~/what-next/src/server.js` — if you cloned somewhere else, update the path
 - Make sure `WHATNEXT_API_KEY` is set to your key (from the welcome email)
 - On Windows, use an absolute path like `C:\Users\<you>\what-next\src\server.js`
+
+**Linux: MCP tools not appearing after install**
+- Claude Desktop on Linux is not officially supported — config paths vary by build
+- The installer writes to `~/.config/Claude/claude_desktop_config.json` by default
+- If your Claude Desktop uses a different location, override it:
+  ```bash
+  XDG_CONFIG_HOME=/path/to/your/config node bin/install.js --client claude --key bak_xxx
+  ```
+- Verify the file was written: `cat ~/.config/Claude/claude_desktop_config.json`
+- Then fully restart Claude Desktop (quit + reopen)
+- For VS Code on Linux, the path `~/.config/Code/User/mcp.json` is standard and should work
 
 **"Invalid or missing API key" errors**
 - Your API key is wrong or missing from the config env block

@@ -36,3 +36,18 @@ test('returns null for unsupported clients', () => {
   const p = resolveConfigPath('openclaw', 'darwin', '/Users/alex');
   assert.equal(p, null);
 });
+
+test('resolves linux claude path using default XDG', () => {
+  const p = resolveConfigPath('claude', 'linux', '/home/alex');
+  assert.equal(p, '/home/alex/.config/Claude/claude_desktop_config.json');
+});
+
+test('resolves linux claude path using custom XDG_CONFIG_HOME', () => {
+  const p = resolveConfigPath('claude', 'linux', '/home/alex', undefined, '/mnt/data/.config');
+  assert.equal(p, '/mnt/data/.config/Claude/claude_desktop_config.json');
+});
+
+test('resolves linux vscode path using custom XDG_CONFIG_HOME', () => {
+  const p = resolveConfigPath('vscode', 'linux', '/home/alex', undefined, '/mnt/data/.config');
+  assert.equal(p, '/mnt/data/.config/Code/User/mcp.json');
+});

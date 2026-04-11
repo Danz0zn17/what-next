@@ -55,14 +55,14 @@ if (client === 'openclaw') {
 }
 
 // ─── Config file paths per client per platform ───────────────────────────────
-if (!resolveConfigPath(client, process.platform, H, process.env.APPDATA)) {
+if (!resolveConfigPath(client, process.platform, H, process.env.APPDATA, process.env.XDG_CONFIG_HOME)) {
   console.error(`\nUnknown client: "${client}"`);
   console.error('Supported: claude, vscode, copilot, cursor, windsurf, openclaw\n');
   process.exit(1);
 }
 
 const platform = process.platform;
-const configPath = resolveConfigPath(client, platform, H, process.env.APPDATA);
+const configPath = resolveConfigPath(client, platform, H, process.env.APPDATA, process.env.XDG_CONFIG_HOME);
 
 // ─── Prompt helper ───────────────────────────────────────────────────────────
 
@@ -138,7 +138,17 @@ if (platform === 'win32') {
   console.log('  launchctl start com.whatnextai.api\n');
 } else {
   const apiPath = join(ROOT, 'src/api-server.js');
-  console.log('Linux tip (optional local web UI/API):');
+  console.log('Linux notes:');
+  console.log(`  Config written to: ${configPath}`);
+  if (client === 'claude') {
+    console.log('  Claude Desktop on Linux: restart Claude completely for the MCP server to appear.');
+    console.log('  If the tool list is still empty, verify your Claude Desktop config path:');
+    console.log('    cat "' + configPath + '"');
+    console.log('  Some Linux builds use a different path. If yours differs, set XDG_CONFIG_HOME:');
+    console.log('    XDG_CONFIG_HOME=/your/path node bin/install.js --client claude --key ' + apiKey);
+  }
+  console.log('\nOptional local web UI/API:');
   console.log(`  node ${apiPath}`);
-  console.log('For always-on, run it via a user systemd service.\n');
+  console.log('For always-on, add it to a user systemd service:');
+  console.log('  systemctl --user enable --now what-next-api\n');
 }
