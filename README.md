@@ -141,6 +141,15 @@ It handles the rest.
 - Fixed in `file_operations.py` since v0.1.1 — native Python reads are used first, shell only as fallback
 - If still occurring, restart the Hermes gateway: `launchctl stop ai.hermes.gateway && launchctl start ai.hermes.gateway`
 
+**Local service health check**
+```bash
+curl http://localhost:3747/health
+# → {"ok":true,"service":"what-next-local"}
+curl http://localhost:3747/context
+# → recent sessions + facts (same as MCP get_context)
+```
+If the local service is down: `launchctl start com.whatnextai.api`
+
 **Cloud health check**
 ```bash
 curl https://what-next-production.up.railway.app/health
