@@ -194,7 +194,7 @@ To enable, add the job to `~/.hermes/cron/jobs.json`:
 
 What Next stores **only what your AI explicitly saves**: session summaries, facts, and any feedback you choose to send via the `send_feedback` tool. No passive telemetry, no error snooping, no tracking of any kind.
 
-All data is isolated to your API key and stored in a private Postgres database on Railway. To request a full delete, email danny@greenberries.co.za.
+All data is isolated to your API key and stored in a private Postgres database on Railway. To request a full delete, email support@greenberries.co.za.
 
 ---
 
