@@ -4,19 +4,23 @@
  * Default port: 3747
  *
  * Endpoints:
- *   GET  /              → Web form for manual session dumps
- *   GET  /health               → Liveness check
- *   POST /session       → Dump a session (JSON body)
- *   POST /fact          → Store a fact (JSON body)
- *   GET  /search?q=...          → FTS search memories
+ *   GET  /                      → Web form for manual session dumps
+ *   GET  /health                → Liveness check
+ *   POST /session               → Dump a session (JSON body)
+ *   PATCH /session/:id          → Edit an existing session
+ *   POST /fact                  → Store a fact (JSON body)
+ *   GET  /search?q=...          → FTS keyword search memories
+ *   GET  /hybrid-search?q=...   → FTS + semantic hybrid search (RRF)
  *   POST /semantic-search       → Vector/semantic search memories
+ *   GET  /whats-next            → Open next_steps across all projects
+ *   GET  /sync/status           → Cloud sync health
  *   GET  /context               → Session-start brief (recent sessions + facts + projects)
  *   GET  /projects              → List all projects
  *   GET  /project/:name         → Get full project history
  */
 
 import { createServer } from 'http';
-import { addSession, addFact, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
 
@@ -559,7 +563,7 @@ export function startApiServer() {
     if (method === 'OPTIONS') {
       const origin = req.headers.origin ?? '';
       const allowed = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : 'null';
-      res.writeHead(204, { 'Access-Control-Allow-Origin': allowed, 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' });
+      res.writeHead(204, { 'Access-Control-Allow-Origin': allowed, 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS' });
       res.end();
       return;
     }
@@ -585,6 +589,16 @@ export function startApiServer() {
         return send(res, 201, { id, message: 'Session stored' });
       }
 
+      // PATCH /session/:id — edit an existing session
+      const patchSessionMatch = method === 'PATCH' && url.pathname.match(/^\/session\/(\d+)$/);
+      if (patchSessionMatch) {
+        const id = parseInt(patchSessionMatch[1], 10);
+        const body = await parseBody(req);
+        const changed = editSession(id, body);
+        if (!changed) return send(res, 404, { error: 'Session not found or nothing to update' });
+        return send(res, 200, { ok: true });
+      }
+
       // POST /fact — store a fact
       if (method === 'POST' && url.pathname === '/fact') {
         const body = await parseBody(req);
@@ -601,6 +615,54 @@ export function startApiServer() {
         if (!q) return send(res, 400, { error: 'q parameter required' });
         const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
         return send(res, 200, searchMemories(q, limit));
+      }
+
+      // GET /hybrid-search?q=...&limit=N — FTS5 + semantic RRF merge
+      if (method === 'GET' && url.pathname === '/hybrid-search') {
+        const q = url.searchParams.get('q');
+        if (!q) return send(res, 400, { error: 'q parameter required' });
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
+
+        // FTS5 results (ranked list of session IDs)
+        let ftsRows = [];
+        try { ftsRows = searchMemories(q, limit * 2).sessions; } catch {}
+
+        // Semantic results (cosine similarity against all embeddings)
+        const queryEmb = await generateEmbedding(q);
+        const allEmbs = getAllEmbeddings().filter(e => e.rowtype === 'session');
+        const semRows = allEmbs
+          .map(e => ({ id: e.row_id, score: cosineSimilarity(queryEmb, e.embedding) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit * 2);
+
+        // Reciprocal Rank Fusion
+        const K = 60;
+        const scores = new Map();
+        ftsRows.forEach((s, i) => scores.set(s.id, (scores.get(s.id) ?? 0) + 1 / (K + i + 1)));
+        semRows.forEach((s, i) => scores.set(s.id, (scores.get(s.id) ?? 0) + 1 / (K + i + 1)));
+
+        const merged = [...scores.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, limit)
+          .map(([id, rrf_score]) => {
+            const record = getSessionById(id);
+            return record ? { ...record, rrf_score: Number(rrf_score.toFixed(4)) } : null;
+          })
+          .filter(Boolean);
+
+        return send(res, 200, { results: merged, source: 'hybrid-rrf' });
+      }
+
+      // GET /whats-next — open next_steps per project
+      if (method === 'GET' && url.pathname === '/whats-next') {
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '8', 10), 20);
+        return send(res, 200, { items: getWhatsNext(limit) });
+      }
+
+      // GET /sync/status — cloud sync health
+      if (method === 'GET' && url.pathname === '/sync/status') {
+        const status = getSyncStatus();
+        return send(res, 200, status);
       }
 
       // POST /semantic-search — vector similarity search

@@ -125,3 +125,14 @@ export async function exportSince(since) {
   const param = since ? `?since=${encodeURIComponent(since)}` : '';
   return fetchCloud(`/export${param}`);
 }
+
+export async function editSession(id, updates) {
+  return fetchCloud(`/session/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function whatsNext(limit = 8) {
+  return fetchCloud(`/whats-next?limit=${limit}`);
+}

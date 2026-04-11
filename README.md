@@ -112,11 +112,13 @@ Once connected, your AI can use these tools automatically:
 |---|---|
 | `get_context` | **Start here.** One call returns all projects, recent sessions, and facts — a full brain dump at session start |
 | `dump_session` | Save a summary of the current session — what was built, decisions made, next steps |
+| `edit_session` | Update fields on an existing session by local ID |
 | `get_project` | Load full history for a project — all prior sessions in one call |
 | `list_projects` | See all known projects with session counts and last activity |
-| `search_memories` | Full-text search across all sessions and facts |
+| `search_memories` | Full-text keyword search across all sessions and facts |
 | `add_fact` | Store a persistent fact (preference, config, decision) that isn't tied to a session |
 | `semantic_search` | Embedding-based search — finds related context even without exact keyword matches |
+| `whats_next` | See the most recent open `next_steps` across all your projects — your instant to-do list |
 
 ---
 
@@ -166,6 +168,12 @@ curl http://localhost:3747/health
 # → {"ok":true,"service":"what-next-local"}
 curl http://localhost:3747/context
 # → recent sessions + facts (same as MCP get_context)
+curl "http://localhost:3747/whats-next"
+# → open next_steps per project
+curl "http://localhost:3747/hybrid-search?q=auth+bug"
+# → FTS + semantic RRF merged results
+curl "http://localhost:3747/sync/status"
+# → last_cloud_sync timestamp and pending gists count
 ```
 If the local service is down:
 - macOS: `launchctl start com.whatnextai.api`

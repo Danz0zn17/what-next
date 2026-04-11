@@ -143,6 +143,36 @@ export function addFact({ project, category, content, tags }) {
   return result.lastInsertRowid;
 }
 
+// --- Session editing ---
+export function editSession(id, updates) {
+  const current = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+  if (!current) return false;
+
+  const fields = [];
+  const params = [];
+  for (const f of ['summary', 'what_was_built', 'decisions', 'stack', 'next_steps', 'tags']) {
+    if (updates[f] !== undefined) {
+      fields.push(`${f} = ?`);
+      params.push(updates[f]);
+    }
+  }
+  if (fields.length === 0) return false;
+  params.push(id);
+
+  const result = db.prepare(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+
+  if (result.changes > 0) {
+    const updated = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+    // Sync FTS5 index: delete old entry, insert updated entry
+    db.prepare(`INSERT INTO sessions_fts(sessions_fts, rowid, summary, what_was_built, decisions, stack, next_steps, tags) VALUES('delete', ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, current.summary, current.what_was_built, current.decisions, current.stack, current.next_steps, current.tags);
+    db.prepare(`INSERT INTO sessions_fts(rowid, summary, what_was_built, decisions, stack, next_steps, tags) VALUES(?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, updated.summary, updated.what_was_built, updated.decisions, updated.stack, updated.next_steps, updated.tags);
+  }
+
+  return result.changes > 0;
+}
+
 // --- Search ---
 export function getRecentSessions(limit = 5) {
   return db.prepare(`
@@ -152,6 +182,34 @@ export function getRecentSessions(limit = 5) {
     ORDER BY s.session_date DESC
     LIMIT ?
   `).all(limit);
+}
+
+// --- What's next: most recent open next_steps per project ---
+export function getWhatsNext(limit = 8) {
+  return db.prepare(`
+    SELECT s.id, s.next_steps, s.session_date, s.summary, p.name as project_name
+    FROM sessions s
+    JOIN projects p ON p.id = s.project_id
+    WHERE s.next_steps IS NOT NULL AND trim(s.next_steps) != ''
+      AND s.id = (
+        SELECT s2.id FROM sessions s2
+        WHERE s2.project_id = s.project_id
+          AND s2.next_steps IS NOT NULL AND trim(s2.next_steps) != ''
+        ORDER BY s2.session_date DESC LIMIT 1
+      )
+    ORDER BY s.session_date DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+// --- Sync status ---
+export function getSyncStatus() {
+  const last = db.prepare("SELECT value FROM sync_state WHERE key = 'last_cloud_sync'").get();
+  const pending = db.prepare('SELECT COUNT(*) as count FROM pending_gists').get();
+  return {
+    last_cloud_sync: last?.value ?? null,
+    pending_gists: pending?.count ?? 0,
+  };
 }
 
 export function getAllFacts() {

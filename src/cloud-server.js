@@ -35,6 +35,8 @@
  *   GET  /projects                      — list projects
  *   GET  /project/:name                 — get project + sessions
  *   GET  /export?since=ISO_DATE         — bulk pull for local↔cloud sync
+ *   PATCH /session/:id                  — edit an existing session
+ *   GET  /whats-next                    — open next_steps per project
  *   POST /feedback                      — send feedback
  */
 
@@ -516,7 +518,7 @@ async function start() {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
-        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+        'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
       });
       res.end();
       return;
@@ -787,15 +789,54 @@ async function start() {
       }
 
       // DELETE /session/:id — user deletes one of their own sessions
-      const deleteSessionMatch = url.pathname.match(/^\/session\/(\d+)$/);
-      if (method === 'DELETE' && deleteSessionMatch) {
-        const sessionId = parseInt(deleteSessionMatch[1], 10);
+      const sessionIdMatch = url.pathname.match(/^\/session\/(\d+)$/);
+      if (method === 'DELETE' && sessionIdMatch) {
+        const sessionId = parseInt(sessionIdMatch[1], 10);
         const { rowCount } = await pool.query(
           'DELETE FROM sessions WHERE id = $1 AND user_id = $2',
           [sessionId, user.id]
         );
         if (!rowCount) return send(res, 404, { error: 'Session not found or not yours' });
         return send(res, 200, { ok: true });
+      }
+
+      // PATCH /session/:id — edit an existing session
+      if (method === 'PATCH' && sessionIdMatch) {
+        const sessionId = parseInt(sessionIdMatch[1], 10);
+        const body = await parseBody(req);
+        const allowed = ['summary', 'what_was_built', 'decisions', 'stack', 'next_steps', 'tags'];
+        const sets = [];
+        const vals = [];
+        for (const f of allowed) {
+          if (body[f] !== undefined) {
+            sets.push(`${f} = $${vals.length + 3}`);
+            vals.push(cap(body[f], f === 'summary' ? 4000 : f === 'what_was_built' ? 8000 : f === 'tags' ? 500 : 4000));
+          }
+        }
+        if (sets.length === 0) return send(res, 400, { error: 'No valid fields to update' });
+        const { rowCount } = await pool.query(
+          `UPDATE sessions SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2`,
+          [sessionId, user.id, ...vals]
+        );
+        if (!rowCount) return send(res, 404, { error: 'Session not found or not yours' });
+        return send(res, 200, { ok: true });
+      }
+
+      // GET /whats-next — most recent open next_steps per project
+      if (method === 'GET' && url.pathname === '/whats-next') {
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '8', 10), 20);
+        const { rows } = await pool.query(`
+          SELECT DISTINCT ON (s.project_id)
+            s.id, s.next_steps, s.session_date::TEXT AS session_date, s.summary,
+            p.name AS project_name
+          FROM sessions s
+          JOIN projects p ON p.id = s.project_id
+          WHERE s.user_id = $1
+            AND s.next_steps IS NOT NULL AND trim(s.next_steps) != ''
+          ORDER BY s.project_id, s.session_date DESC
+          LIMIT $2
+        `, [user.id, limit]);
+        return send(res, 200, { items: rows });
       }
 
       send(res, 404, { error: 'Not found' });

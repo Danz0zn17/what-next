@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { addSession, addFact, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
@@ -406,6 +406,54 @@ server.tool(
       return { content: [{ type: 'text', text: `No strong matches found for: "${query}"` }] };
     }
 
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+// ─── TOOL: edit_session ───────────────────────────────────────────────────────
+server.tool(
+  'edit_session',
+  {
+    id: z.number().describe('Local session ID to edit (from dump_session response or search results)'),
+    summary: z.string().optional().describe('Updated session summary'),
+    what_was_built: z.string().optional().describe('Updated built description'),
+    decisions: z.string().optional().describe('Updated decisions'),
+    stack: z.string().optional().describe('Updated stack'),
+    next_steps: z.string().optional().describe('Updated next steps'),
+    tags: z.string().optional().describe('Updated comma-separated tags'),
+  },
+  async ({ id, ...updates }) => {
+    const changed = editSession(id, updates);
+    if (!changed) {
+      return { content: [{ type: 'text', text: `Session ${id} not found or no fields to update.` }] };
+    }
+    // Refresh embedding for updated session
+    const session = getSessionById(id);
+    if (session) {
+      const text = [session.summary, session.what_was_built, session.decisions, session.next_steps, session.tags].filter(Boolean).join(' ');
+      generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
+    }
+    return { content: [{ type: 'text', text: `Session ${id} updated.` }] };
+  }
+);
+
+// ─── TOOL: whats_next ─────────────────────────────────────────────────────────
+server.tool(
+  'whats_next',
+  {
+    limit: z.number().optional().default(8).describe('Max number of projects to include'),
+  },
+  async ({ limit }) => {
+    const items = getWhatsNext(limit);
+    if (items.length === 0) {
+      return { content: [{ type: 'text', text: 'No open next steps found.' }] };
+    }
+    const lines = ['## What Next — Open Action Items\n'];
+    for (const item of items) {
+      lines.push(`**${item.project_name}** — last session: ${(item.session_date ?? '').split('T')[0]}`);
+      lines.push(`→ ${item.next_steps}`);
+      lines.push('');
+    }
     return { content: [{ type: 'text', text: lines.join('\n') }] };
   }
 );
