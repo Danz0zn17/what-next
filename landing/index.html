@@ -392,7 +392,7 @@
       border-radius: var(--r-lg);
       overflow: hidden;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 13px;
+      font-size: 14px;
     }
 
     .diag-bar {
@@ -413,14 +413,19 @@
       border: 1px solid var(--border-mid);
     }
 
-    .diag-title { margin-left: 8px; font-size: 11px; color: var(--text-3); }
+    .diag-title {
+      margin-left: 8px;
+      font-size: 12.5px;
+      color: var(--text-2);
+      letter-spacing: 0.01em;
+    }
 
     .diag-section {
-      padding: 7px 16px;
-      font-size: 10px;
-      color: var(--text-3);
+      padding: 9px 16px;
+      font-size: 11.5px;
+      color: var(--text-2);
       border-bottom: 1px solid var(--border);
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
       background: rgba(255,255,255,0.01);
     }
 
@@ -428,20 +433,29 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 13px 16px;
+      padding: 16px 18px;
       border-bottom: 1px solid var(--border);
       transition: background 0.4s;
     }
     .diag-row:last-child { border-bottom: none; }
-    .diag-row.lit { background: rgba(34,197,94,0.045); }
+    .diag-row.lit {
+      background: rgba(34,197,94,0.08);
+      box-shadow: inset 0 0 0 1px rgba(34,197,94,0.2);
+    }
 
-    .diag-key { color: var(--text-2); }
+    .diag-key {
+      color: var(--text-1);
+      font-size: 13.5px;
+      font-weight: 500;
+    }
 
     .diag-val {
+      font-size: 13.5px;
+      font-weight: 500;
       transition: color 0.4s, opacity 0.4s;
     }
-    .diag-val.null   { color: var(--red); opacity: 0.6; }
-    .diag-val.shared { color: var(--accent-light); }
+    .diag-val.null   { color: #fbbf24; opacity: 0.92; }
+    .diag-val.shared { color: #7dd3fc; text-shadow: 0 0 18px rgba(125,211,252,0.16); }
 
     /* ══════ HOW IT WORKS ══════ */
     .how {
@@ -472,7 +486,7 @@
       border-radius: var(--r-lg);
       overflow: hidden;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 13.5px;
+      font-size: 14.5px;
     }
 
     .term-bar {
@@ -493,17 +507,18 @@
       background: var(--bg-2);
     }
 
-    .term-label { margin-left: 8px; font-size: 11.5px; color: var(--text-3); }
+    .term-label { margin-left: 8px; font-size: 12.5px; color: var(--text-2); }
 
     .term-body {
       padding: 26px 26px 28px;
-      line-height: 1.85;
+      line-height: 1.95;
+      font-size: 14px;
       min-height: 300px;
     }
 
     .term-line { display: block; }
-    .t-dim     { color: var(--text-3); }
-    .t-prompt  { color: var(--text-3); margin-right: 8px; user-select: none; }
+    .t-dim     { color: var(--text-2); }
+    .t-prompt  { color: var(--text-2); margin-right: 8px; user-select: none; }
     .t-fn      { color: var(--accent-light); }
     .t-str     { color: #86efac; }
     .t-key     { color: #93c5fd; }
@@ -638,18 +653,19 @@
     }
 
     .surface-name {
-      font-size: 12.5px;
+      font-size: 13.5px;
       font-weight: 500;
-      color: var(--text-2);
+      color: var(--text-1);
       text-align: center;
       line-height: 1.3;
     }
 
     .surface-status {
-      font-size: 10px;
-      letter-spacing: 0.07em;
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: var(--text-3);
+      color: var(--text-2);
       font-family: 'JetBrains Mono', monospace;
     }
     .surface-card.live .surface-status { color: var(--green); }
@@ -688,8 +704,8 @@
     .setup-col { background: var(--bg-1); padding: 28px; }
 
     .setup-col-label {
-      font-size: 11px;
-      color: var(--text-3);
+      font-size: 12px;
+      color: var(--text-2);
       letter-spacing: 0.06em;
       text-transform: uppercase;
       margin-bottom: 18px;
@@ -698,7 +714,8 @@
 
     .code {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 12.5px;
+      font-size: 13.5px;
+      color: var(--text-1);
       line-height: 1.85;
     }
 
@@ -1016,24 +1033,24 @@
           <div class="diag-section">without What Next</div>
           <div class="diag-row">
             <span class="diag-key">claude_desktop</span>
-            <span class="diag-val null" id="d-claude">context: null</span>
+            <span class="diag-val null" id="d-claude">context: none</span>
           </div>
           <div class="diag-row">
             <span class="diag-key">vscode_copilot</span>
-            <span class="diag-val null" id="d-vscode">context: null</span>
+            <span class="diag-val null" id="d-vscode">context: none</span>
           </div>
           <div class="diag-row">
             <span class="diag-key">github_copilot</span>
-            <span class="diag-val null" id="d-gh">context: null</span>
+            <span class="diag-val null" id="d-gh">context: none</span>
           </div>
           <div class="diag-row">
             <span class="diag-key">telegram_bot</span>
-            <span class="diag-val null" id="d-tg">context: null</span>
+            <span class="diag-val null" id="d-tg">context: none</span>
           </div>
           <div class="diag-section" style="margin-top:1px">with What Next</div>
           <div class="diag-row" id="diag-all-row">
             <span class="diag-key">all_surfaces</span>
-            <span class="diag-val" id="d-all" style="color:var(--text-3)">waiting&hellip;</span>
+            <span class="diag-val" id="d-all" style="color:var(--text-3)">standby&hellip;</span>
           </div>
         </div>
       </div>
