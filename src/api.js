@@ -5,6 +5,7 @@
  *
  * Endpoints:
  *   GET  /              → Web form for manual session dumps
+ *   GET  /health               → Liveness check
  *   POST /session       → Dump a session (JSON body)
  *   POST /fact          → Store a fact (JSON body)
  *   GET  /search?q=...          → FTS search memories
@@ -564,6 +565,11 @@ export function startApiServer() {
     }
 
     try {
+      // GET /health — liveness check for monitoring and SOUL.md self-diagnosis
+      if (method === 'GET' && url.pathname === '/health') {
+        return send(res, 200, { ok: true, service: 'what-next-local' });
+      }
+
       // GET / — web UI
       if (method === 'GET' && url.pathname === '/') {
         return sendHtml(res, HTML_FORM);
