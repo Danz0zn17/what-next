@@ -29,6 +29,8 @@
  *   DELETE /session/:id                 — delete own session
  *   POST /fact                          — store a fact
  *   GET  /search?q=...&limit=N          — full-text search
+ *   GET  /semantic-search?q=...&limit=N  — vector similarity search
+ *   POST /reindex                       — backfill embeddings for all own sessions+facts
  *   GET  /context                       — session-start brief
  *   GET  /projects                      — list projects
  *   GET  /project/:name                 — get project + sessions
@@ -676,6 +678,42 @@ async function start() {
         } catch (err) {
           log('error', 'semantic-search error', { err: err.message });
           return send(res, 500, { error: 'Semantic search unavailable' });
+        }
+      }
+
+      // POST /reindex — backfill embeddings for own sessions + facts that aren't indexed yet
+      if (method === 'POST' && url.pathname === '/reindex') {
+        try {
+          const [{ rows: sessions }, { rows: facts }] = await Promise.all([
+            pool.query(`
+              SELECT s.id, s.summary, s.what_was_built, s.decisions, s.next_steps
+              FROM sessions s
+              LEFT JOIN embeddings e ON e.user_id = $1 AND e.rowtype = 'session' AND e.row_id = s.id
+              WHERE s.user_id = $1 AND e.id IS NULL
+            `, [user.id]),
+            pool.query(`
+              SELECT f.id, f.category, f.content, f.tags
+              FROM facts f
+              LEFT JOIN embeddings e ON e.user_id = $1 AND e.rowtype = 'fact' AND e.row_id = f.id
+              WHERE f.user_id = $1 AND e.id IS NULL
+            `, [user.id]),
+          ]);
+          let indexed = 0;
+          for (const s of sessions) {
+            const text = [s.summary, s.what_was_built, s.decisions, s.next_steps].filter(Boolean).join(' ').slice(0, 2000);
+            await storeEmbedding(user.id, 'session', s.id, text);
+            indexed++;
+          }
+          for (const f of facts) {
+            const text = [f.category, f.content, f.tags].filter(Boolean).join(' ').slice(0, 2000);
+            await storeEmbedding(user.id, 'fact', f.id, text);
+            indexed++;
+          }
+          log('info', 'Reindex complete', { user: user.email, indexed });
+          return send(res, 200, { indexed, message: `${indexed} items indexed` });
+        } catch (err) {
+          log('error', 'Reindex error', { err: err.message });
+          return send(res, 500, { error: 'Reindex failed' });
         }
       }
 
