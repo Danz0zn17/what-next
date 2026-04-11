@@ -10,7 +10,7 @@ import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '1.1.0',
+  version: '1.2.0',
 });
 
 // ─── Startup: sync any pending gists to cloud ─────────────────────────────────
