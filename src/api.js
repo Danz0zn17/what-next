@@ -447,8 +447,9 @@ function send(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    // Restrict to localhost only — api is local-only, no cross-origin needed
+    'Access-Control-Allow-Origin': 'http://localhost:3747',
+    'X-Content-Type-Options': 'nosniff',
   });
   res.end(payload);
 }
@@ -458,12 +459,22 @@ function sendHtml(res, html) {
   res.end(html);
 }
 
+const MAX_BODY_BYTES = 64 * 1024; // 64KB
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', chunk => (raw += chunk));
+    let size = 0;
+    req.on('data', chunk => {
+      size += Buffer.byteLength(chunk);
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+        return;
+      }
+      raw += chunk;
+    });
     req.on('end', () => {
-      try { resolve(JSON.parse(raw || '{}')); } catch { reject(new Error('Invalid JSON')); }
+      try { resolve(JSON.parse(raw || '{}')); } catch { reject(Object.assign(new Error('Invalid JSON'), { statusCode: 400 })); }
     });
   });
 }
@@ -582,7 +593,7 @@ export function startApiServer() {
       if (method === 'GET' && url.pathname === '/search') {
         const q = url.searchParams.get('q');
         if (!q) return send(res, 400, { error: 'q parameter required' });
-        const limit = parseInt(url.searchParams.get('limit') ?? '10');
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
         return send(res, 200, searchMemories(q, limit));
       }
 
