@@ -9,7 +9,7 @@ import { syncPending, dumpToGist } from './gist-client.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '1.0.0',
+  version: '1.1.0',
 });
 
 // ─── Startup: sync any pending gists to cloud ─────────────────────────────────
@@ -20,6 +20,29 @@ if (cloud.isEnabled()) {
     }
   });
 }
+
+// ─── Startup: non-blocking update check ───────────────────────────────────────
+// Fetches the latest GitHub release tag and logs a notice if a newer version is
+// available. Fire-and-forget — never blocks MCP startup or throws.
+(async () => {
+  try {
+    const res = await fetch(
+      'https://api.github.com/repos/Danz0zn17/what-next/releases/latest',
+      { headers: { 'User-Agent': 'what-next-mcp', Accept: 'application/vnd.github+json' } }
+    );
+    if (!res.ok) return; // no releases yet or rate-limited — silent
+    const { tag_name } = await res.json();
+    const local = server.version ?? '1.0.0';
+    if (tag_name && tag_name !== `v${local}`) {
+      process.stderr.write(
+        `[what-next] Update available: ${tag_name} (you have v${local}). ` +
+        `Run: cd ~/what-next && git pull && npm install\n`
+      );
+    }
+  } catch {
+    // network unavailable — silently skip
+  }
+})();
 
 // ─── TOOL: dump_session ───────────────────────────────────────────────────────
 server.tool(
