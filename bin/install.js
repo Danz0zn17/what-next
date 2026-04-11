@@ -18,10 +18,12 @@ import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { fileURLToPath } from 'url';
+import { resolveConfigPath, isVscodeLikeClient } from '../src/platform-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(join(__dirname, '..'));
 const CLOUD_URL = 'https://what-next-production.up.railway.app';
+const H = homedir();
 
 // ─── Argument parsing ────────────────────────────────────────────────────────
 
@@ -53,47 +55,14 @@ if (client === 'openclaw') {
 }
 
 // ─── Config file paths per client per platform ───────────────────────────────
-
-const H = homedir();
-const APPDATA = process.env.APPDATA ?? join(H, 'AppData', 'Roaming');
-
-const CONFIG_PATHS = {
-  claude: {
-    darwin: join(H, 'Library/Application Support/Claude/claude_desktop_config.json'),
-    linux:  join(H, '.config/Claude/claude_desktop_config.json'),
-    win32:  join(APPDATA, 'Claude/claude_desktop_config.json'),
-  },
-  vscode: {
-    darwin: join(H, 'Library/Application Support/Code/User/mcp.json'),
-    linux:  join(H, '.config/Code/User/mcp.json'),
-    win32:  join(APPDATA, 'Code/User/mcp.json'),
-  },
-  copilot: {
-    darwin: join(H, 'Library/Application Support/Code/User/mcp.json'),
-    linux:  join(H, '.config/Code/User/mcp.json'),
-    win32:  join(APPDATA, 'Code/User/mcp.json'),
-  },
-  cursor: {
-    darwin: join(H, '.cursor/mcp.json'),
-    linux:  join(H, '.cursor/mcp.json'),
-    win32:  join(H, '.cursor/mcp.json'),
-  },
-  windsurf: {
-    darwin: join(H, '.codeium/windsurf/mcp_config.json'),
-    linux:  join(H, '.codeium/windsurf/mcp_config.json'),
-    win32:  join(H, '.codeium/windsurf/mcp_config.json'),
-  },
-};
-
-const paths = CONFIG_PATHS[client];
-if (!paths) {
+if (!resolveConfigPath(client, process.platform, H, process.env.APPDATA)) {
   console.error(`\nUnknown client: "${client}"`);
-  console.error(`Supported: ${Object.keys(CONFIG_PATHS).join(', ')}, openclaw\n`);
+  console.error('Supported: claude, vscode, copilot, cursor, windsurf, openclaw\n');
   process.exit(1);
 }
 
 const platform = process.platform;
-const configPath = paths[platform] ?? paths.linux;
+const configPath = resolveConfigPath(client, platform, H, process.env.APPDATA);
 
 // ─── Prompt helper ───────────────────────────────────────────────────────────
 
@@ -117,7 +86,7 @@ if (!apiKey || !apiKey.startsWith('bak_')) {
 // ─── Build the server entry ──────────────────────────────────────────────────
 
 // VS Code / Copilot use "servers" key; everything else uses "mcpServers"
-const isVscode = ['vscode', 'copilot'].includes(client);
+const isVscode = isVscodeLikeClient(client);
 const serverKey = isVscode ? 'servers' : 'mcpServers';
 
 const serverEntry = {

@@ -6,6 +6,7 @@ import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
 import { syncPending, dumpToGist } from './gist-client.js';
+import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
@@ -33,12 +34,8 @@ if (cloud.isEnabled()) {
     if (!res.ok) return; // no releases yet or rate-limited — silent
     const { tag_name } = await res.json();
     const local = server.version ?? '1.0.0';
-    if (tag_name && tag_name !== `v${local}`) {
-      process.stderr.write(
-        `[what-next] Update available: ${tag_name} (you have v${local}). ` +
-        `Run: cd ~/what-next && git pull && npm install\n`
-      );
-    }
+    const notice = buildUpdateNotice(local, tag_name);
+    if (notice) process.stderr.write(notice);
   } catch {
     // network unavailable — silently skip
   }
