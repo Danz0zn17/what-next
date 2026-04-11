@@ -36,10 +36,10 @@
  *   GET  /project/:name                 — get project + sessions
  *   GET  /export?since=ISO_DATE         — bulk pull for local↔cloud sync
  *   POST /feedback                      — send feedback
- *   GET  /semantic-search?q=...&limit=N  — vector similarity search
  */
 
 import { createServer } from 'http';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import pkg from 'pg';
 const { Pool } = pkg;
 import { pipeline } from '@huggingface/transformers';
@@ -262,10 +262,17 @@ async function storeEmbedding(userId, rowtype, rowId, text) {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-import { randomBytes } from 'crypto';
-
 function makeApiKey() {
   return 'bak_' + randomBytes(32).toString('hex');
+}
+
+// Constant-time string comparison — prevents timing attacks on secrets
+function safeEqual(a, b) {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 async function resolveUser(apiKey) {
@@ -485,7 +492,7 @@ function parseBody(req) {
       raw += c;
     });
     req.on('end', () => {
-      try { resolve(JSON.parse(raw || '{}')); } catch { reject(new Error('Invalid JSON')); }
+      try { resolve(JSON.parse(raw || '{}')); } catch { reject(Object.assign(new Error('Invalid JSON'), { statusCode: 400 })); }
     });
   });
 }
@@ -532,7 +539,7 @@ async function start() {
     // ── Public: Netlify webhook ──
     if (method === 'POST' && url.pathname === '/webhooks/beta-signup') {
       const secret = url.searchParams.get('secret');
-      if (!WEBHOOK_SECRET || secret !== WEBHOOK_SECRET) {
+      if (!safeEqual(WEBHOOK_SECRET, secret)) {
         return send(res, 401, { error: 'Unauthorized' });
       }
       try {
@@ -547,9 +554,9 @@ async function start() {
         // Check if already exists (idempotent)
         const existing = await pool.query('SELECT api_key FROM users WHERE email = $1', [email.toLowerCase().trim()]);
         if (existing.rows.length) {
-        log('info', 'Webhook: user already exists', { email });
-        return send(res, 200, { ok: true, note: 'already exists' });
-      }
+          log('info', 'Webhook: user already exists', { email });
+          return send(res, 200, { ok: true, note: 'already exists' });
+        }
 
         const user = await createUser({ email, name });
         await sendWelcomeEmail({ name, email, apiKey: user.api_key });
@@ -565,7 +572,7 @@ async function start() {
     // ── Admin: create user ──
     if (method === 'POST' && url.pathname === '/admin/users') {
       const adminKey = req.headers['x-admin-key'];
-      if (!ADMIN_KEY || adminKey !== ADMIN_KEY) return send(res, 401, { error: 'Unauthorized' });
+      if (!safeEqual(ADMIN_KEY, adminKey)) return send(res, 401, { error: 'Unauthorized' });
       try {
         const body = await parseBody(req);
         if (!body.email) return send(res, 400, { error: 'email required' });
@@ -590,8 +597,8 @@ async function start() {
       // POST /feedback
       if (method === 'POST' && url.pathname === '/feedback') {
         const body = await parseBody(req);
-        sendTelegramAlert(`What Next feedback from ${user.email}: ${String(body.message ?? body.content ?? JSON.stringify(body)).slice(0, 200)}`);
         if (!body.message) return send(res, 400, { error: 'message is required' });
+        sendTelegramAlert(`What Next feedback from ${user.email}: ${String(body.message).slice(0, 200)}`);
         const { rows } = await pool.query(`
           INSERT INTO feedback (user_id, type, message, context)
           VALUES ($1, $2, $3, $4) RETURNING id
@@ -651,7 +658,7 @@ async function start() {
       if (method === 'GET' && url.pathname === '/search') {
         const q = url.searchParams.get('q');
         if (!q) return send(res, 400, { error: 'q parameter required' });
-        const limit = parseInt(url.searchParams.get('limit') ?? '10');
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
         return send(res, 200, await searchMemories(user.id, q, limit));
       }
 
@@ -659,7 +666,7 @@ async function start() {
       if (method === 'GET' && url.pathname === '/semantic-search') {
         const q = url.searchParams.get('q');
         if (!q) return send(res, 400, { error: 'q parameter required' });
-        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10'), 50);
+        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
         try {
           const vec = await generateEmbedding(q);
           const { rows } = await pool.query(`
@@ -796,7 +803,7 @@ async function start() {
       const status = err.statusCode ?? 500;
       log('error', 'Request error', { method, path: url.pathname, status, err: err.message });
       if (status === 500) trackError(err.message);
-      send(res, status, { error: status === 413 ? 'Request body too large' : 'Internal server error' });
+      send(res, status, { error: status === 413 ? 'Request body too large' : status === 400 ? err.message : 'Internal server error' });
     }
   });
 
