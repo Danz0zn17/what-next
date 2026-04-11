@@ -1,4 +1,4 @@
-import { join } from 'path';
+import path from 'path';
 
 const SUPPORTED_CLIENTS = new Set(['claude', 'vscode', 'copilot', 'cursor', 'windsurf']);
 
@@ -10,36 +10,43 @@ export function isVscodeLikeClient(client) {
   return client === 'vscode' || client === 'copilot';
 }
 
+function joinForPlatform(platform, ...parts) {
+  if (platform === 'win32') {
+    return path.win32.join(...parts);
+  }
+  return path.posix.join(...parts);
+}
+
 export function resolveConfigPath(client, platform, homeDir, appDataEnv) {
   if (!isSupportedClient(client)) return null;
 
-  const appData = appDataEnv ?? join(homeDir, 'AppData', 'Roaming');
+  const appData = appDataEnv ?? joinForPlatform('win32', homeDir, 'AppData', 'Roaming');
 
   const configPaths = {
     claude: {
-      darwin: join(homeDir, 'Library/Application Support/Claude/claude_desktop_config.json'),
-      linux: join(homeDir, '.config/Claude/claude_desktop_config.json'),
-      win32: join(appData, 'Claude/claude_desktop_config.json'),
+      darwin: joinForPlatform('darwin', homeDir, 'Library/Application Support/Claude/claude_desktop_config.json'),
+      linux: joinForPlatform('linux', homeDir, '.config/Claude/claude_desktop_config.json'),
+      win32: joinForPlatform('win32', appData, 'Claude/claude_desktop_config.json'),
     },
     vscode: {
-      darwin: join(homeDir, 'Library/Application Support/Code/User/mcp.json'),
-      linux: join(homeDir, '.config/Code/User/mcp.json'),
-      win32: join(appData, 'Code/User/mcp.json'),
+      darwin: joinForPlatform('darwin', homeDir, 'Library/Application Support/Code/User/mcp.json'),
+      linux: joinForPlatform('linux', homeDir, '.config/Code/User/mcp.json'),
+      win32: joinForPlatform('win32', appData, 'Code/User/mcp.json'),
     },
     copilot: {
-      darwin: join(homeDir, 'Library/Application Support/Code/User/mcp.json'),
-      linux: join(homeDir, '.config/Code/User/mcp.json'),
-      win32: join(appData, 'Code/User/mcp.json'),
+      darwin: joinForPlatform('darwin', homeDir, 'Library/Application Support/Code/User/mcp.json'),
+      linux: joinForPlatform('linux', homeDir, '.config/Code/User/mcp.json'),
+      win32: joinForPlatform('win32', appData, 'Code/User/mcp.json'),
     },
     cursor: {
-      darwin: join(homeDir, '.cursor/mcp.json'),
-      linux: join(homeDir, '.cursor/mcp.json'),
-      win32: join(homeDir, '.cursor/mcp.json'),
+      darwin: joinForPlatform('darwin', homeDir, '.cursor/mcp.json'),
+      linux: joinForPlatform('linux', homeDir, '.cursor/mcp.json'),
+      win32: joinForPlatform('win32', homeDir, '.cursor/mcp.json'),
     },
     windsurf: {
-      darwin: join(homeDir, '.codeium/windsurf/mcp_config.json'),
-      linux: join(homeDir, '.codeium/windsurf/mcp_config.json'),
-      win32: join(homeDir, '.codeium/windsurf/mcp_config.json'),
+      darwin: joinForPlatform('darwin', homeDir, '.codeium/windsurf/mcp_config.json'),
+      linux: joinForPlatform('linux', homeDir, '.codeium/windsurf/mcp_config.json'),
+      win32: joinForPlatform('win32', homeDir, '.codeium/windsurf/mcp_config.json'),
     },
   };
 

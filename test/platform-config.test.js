@@ -19,7 +19,7 @@ test('detects vscode-like clients', () => {
 
 test('resolves windows vscode path using APPDATA', () => {
   const p = resolveConfigPath('vscode', 'win32', 'C:/Users/alex', 'C:/Users/alex/AppData/Roaming');
-  assert.equal(p, 'C:/Users/alex/AppData/Roaming/Code/User/mcp.json');
+  assert.equal(p, 'C:\\Users\\alex\\AppData\\Roaming\\Code\\User\\mcp.json');
 });
 
 test('resolves mac claude path', () => {
