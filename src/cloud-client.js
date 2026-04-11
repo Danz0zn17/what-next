@@ -117,6 +117,10 @@ export async function getContext() {
   return fetchCloud('/context');
 }
 
+export async function semanticSearch(q, limit = 5) {
+  return fetchCloud(`/semantic-search?q=${encodeURIComponent(q)}&limit=${limit}`);
+}
+
 export async function exportSince(since) {
   const param = since ? `?since=${encodeURIComponent(since)}` : '';
   return fetchCloud(`/export${param}`);

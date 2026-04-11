@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { addSession, addFact, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
-import { CloudUnavailableError } from './cloud-client.js';import { syncPending, dumpToGist } from './gist-client.js';
+import { CloudUnavailableError } from './cloud-client.js';
+import { syncPending, dumpToGist } from './gist-client.js';
 
 const server = new McpServer({
   name: 'what-next',
@@ -318,7 +319,7 @@ server.tool(
 );
 
 // ─── TOOL: semantic_search ────────────────────────────────────────────────────
-// Local-only (embeddings live on this machine)
+// Cloud-first (falls back to local embeddings if cloud unavailable)
 server.tool(
   'semantic_search',
   {
@@ -326,6 +327,28 @@ server.tool(
     limit: z.number().optional().default(5).describe('Max results to return'),
   },
   async ({ query, limit }) => {
+    // Try cloud semantic search first
+    if (cloud.isEnabled()) {
+      try {
+        const { results } = await cloud.semanticSearch(query, limit);
+        if (results.length > 0) {
+          const lines = [`Semantic search: "${query}" [cloud]\n`];
+          for (const r of results) {
+            if (r.score < 0.3) continue;
+            lines.push(`**[${r.rowtype}]** (score: ${Number(r.score).toFixed(2)})`);
+            lines.push(r.text ?? '');
+            lines.push('');
+          }
+          if (lines.length > 1) {
+            return { content: [{ type: 'text', text: lines.join('\n') }] };
+          }
+        }
+      } catch (err) {
+        if (!(err instanceof CloudUnavailableError)) throw err;
+      }
+    }
+
+    // Fall back to local embeddings
     const queryEmbedding = await generateEmbedding(query);
     const allEmbeddings = getAllEmbeddings();
 
