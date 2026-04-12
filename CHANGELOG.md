@@ -9,6 +9,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.5.0] — 2026-04-12
+
+### Added
+- **`wn` CLI** — a terminal-native interface to What Next. No new dependencies — talks directly to the local REST API at `localhost:3747`. Available globally after `npm link`.
+  - `wn context` — full brain dump (projects, recent sessions, facts)
+  - `wn next` — open next steps across all projects
+  - `wn projects` — list all projects with session counts
+  - `wn project <name>` — full session history for one project
+  - `wn search <query>` — hybrid search across all memories
+  - `wn dump` — interactive session save (prompts for all fields)
+  - `wn fact [content]` — store a persistent fact (inline or interactive)
+  - `wn status` — local API health + cloud sync status
+  - `wn open` — open the web UI in your default browser
+  - `wn install --client <x> --key <k>` — delegates to the existing MCP installer
+  - Aliases: `ctx`, `n`, `ps`, `p`, `s`, `d`, `f`, `i` for power users
+  - TTY-aware colour output (auto-disabled when piped)
+
+---
+
 ## [1.4.0] — 2026-04-12
 
 ### Added

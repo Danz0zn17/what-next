@@ -1,11 +1,13 @@
 {
   "name": "what-next",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "What Next \u2014 AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
   "type": "module",
   "main": "src/server.js",
   "bin": {
-    "install-what-next": "bin/install.js"
+    "install-what-next": "bin/install.js",
+    "wn": "bin/wn.js",
+    "wn": "bin/wn.js"
   },
   "scripts": {
     "start": "node src/cloud-server.js",
