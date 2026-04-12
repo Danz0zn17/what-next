@@ -223,6 +223,39 @@ mcp_servers:
 
 Hermes will then have access to the same memory tools on your phone via Telegram.
 
+**Model fallback — never get cut off mid-session**
+
+When your primary model hits a rate limit or runs out of credits, Hermes falls through a chain of alternatives automatically. The key insight: OpenRouter's `:free` models require no credits at all — they work even at a $0 balance, just with rate limits. Put them first in the chain so you always have a capable fallback that costs nothing.
+
+Add this to `~/.hermes/config.yaml` under your existing model config:
+
+```yaml
+model:
+  default: "anthropic/claude-sonnet-4-5"
+  provider: "openrouter"
+
+fallback_chain:
+  # Free tier — no credits needed, works at $0 balance (rate-limited)
+  - provider: "openrouter"
+    model: "deepseek/deepseek-chat-v3-0324:free"
+    api_key_env: "OPENROUTER_API_KEY"
+  # Second free option if DeepSeek is rate-limited
+  - provider: "openrouter"
+    model: "meta-llama/llama-3.3-70b-instruct:free"
+    api_key_env: "OPENROUTER_API_KEY"
+  # Paid fallback — Claude Haiku via direct Anthropic API
+  - provider: "custom"
+    model: "claude-haiku-4-5-20251001"
+    base_url: "https://api.anthropic.com/v1"
+    api_key_env: "ANTHROPIC_API_KEY"
+  # Last resort — Google Gemini direct
+  - provider: "google-gemini"
+    model: "gemini-2.5-flash"
+    api_key_env: "GEMINI_API_KEY"
+```
+
+> **Why this matters:** Claude Code and Claude Desktop subscriptions are UI products — their credits cannot be shared with API-based tools like Hermes. The `:free` fallbacks ensure your Telegram bot stays capable even when paid credits on any provider are exhausted, without needing to top up immediately.
+
 **Tech Radar (Hermes optional feature)**
 
 What Next ships with a daily tech radar cron job for Hermes. Every morning at 06:00 it scans Hacker News, Reddit r/LocalLLaMA, and r/MachineLearning for AI/MCP/agent news, sends a Telegram digest, and lets you reply "implement 1" to auto-apply a suggestion.
