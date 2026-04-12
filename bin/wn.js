@@ -20,10 +20,11 @@
 
 import { createInterface } from 'readline';
 import { spawnSync } from 'child_process';
+import { basename } from 'path';
 
 const BASE = 'http://localhost:3747';
 const PORT = 3747;
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
 const c = {
@@ -202,7 +203,12 @@ async function cmdDump() {
   console.log(`\n${bold('=== Dump Session to What Next ===')}\n`);
   console.log(dim('  Leave optional fields blank to skip.\n'));
 
-  const project      = await prompt(bold('Project name: '), true);
+  const gitDetect   = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: process.cwd() });
+  const gitDefault   = gitDetect.status === 0 ? basename(gitDetect.stdout.trim()) : '';
+  const projectHint  = gitDefault ? bold(`Project name [${gitDefault}]: `) : bold('Project name: ');
+  const projectInput = await prompt(projectHint, !gitDefault);
+  const project      = projectInput || gitDefault;
+  if (!project) { console.error(col('red', 'Project name is required.')); process.exit(1); }
   const summary      = await prompt(bold('Summary: '),      true);
   const what_built   = await prompt(dim('What was built: '));
   const decisions    = await prompt(dim('Key decisions: '));

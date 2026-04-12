@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.5.1] — 2026-04-12
+
+### Added
+- `wn dump` now auto-detects the current git repo name as the default project (prompts `[repo-name]`)
+- README: new `## Terminal CLI (wn)` section with full command reference
+- Landing page: `wn` terminal CLI quick-start block in the Setup section
+
+---
+
 ## [1.5.0] — 2026-04-12
 
 ### Added

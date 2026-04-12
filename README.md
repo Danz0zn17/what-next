@@ -126,6 +126,33 @@ What Next will appear as an available MCP tool. You'll see tools like `dump_sess
 
 ---
 
+## Optional: `wn` CLI
+
+A terminal-native interface to What Next. No new dependencies — talks to the local REST API at `localhost:3747`.
+
+```bash
+npm link   # one-time — makes wn available in any terminal
+```
+
+Then from anywhere:
+
+```bash
+wn context                  # full brain dump — projects, sessions, facts
+wn next                     # open next steps across all projects
+wn projects                 # list all projects
+wn project <name>           # full session history for a project
+wn search "supabase auth"   # hybrid search across all memories
+wn dump                     # save a session interactively (auto-detects current git repo)
+wn fact "always use conventional commits"
+wn status                   # local API health + cloud sync status
+wn open                     # open the web UI in your browser
+wn install --client codex --key bak_xxx   # run the MCP installer
+```
+
+Short aliases: `ctx`, `n`, `ps`, `p`, `s`, `d`, `f`, `i`. Colour output is TTY-aware (auto-disabled when piping).
+
+---
+
 ## Available Tools
 
 Once connected, your AI can use these tools automatically:
