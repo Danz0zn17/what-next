@@ -5,12 +5,16 @@
  * Patches your AI tool's MCP config to add What Next in one command.
  *
  * Usage:
- *   node bin/install.js --client claude --key bak_xxx
+ *   node bin/install.js --client claude  --key bak_xxx
  *   node bin/install.js --client vscode  --key bak_xxx
+ *   node bin/install.js --client codex   --key bak_xxx
  *   node bin/install.js --client cursor  --key bak_xxx
  *   node bin/install.js --client openclaw
  *
- * Supported clients: claude, vscode, copilot, cursor, windsurf, openclaw
+ * Supported clients: claude, vscode, copilot, cursor, windsurf, codex, openclaw
+ *
+ * Codex note: covers both the VS Code Codex extension (openai.chatgpt) and the
+ * Codex CLI agent — both read ~/.codex/config.toml for MCP servers.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'fs';
@@ -54,10 +58,76 @@ if (client === 'openclaw') {
   process.exit(0);
 }
 
+// ─── Codex: TOML config (~/.codex/config.toml) ──────────────────────────────
+// Covers both the VS Code Codex extension and the Codex CLI — they share the
+// same config file. We handle this separately because it uses TOML, not JSON.
+
+if (client === 'codex') {
+  if (!apiKey) {
+    console.log('\nWhat Next — MCP installer (Codex)\n');
+    apiKey = await prompt('Your What Next API key (from your welcome email): ');
+  }
+
+  if (!apiKey || !apiKey.startsWith('bak_')) {
+    console.error('\nAPI key should start with "bak_" — check your welcome email.\n');
+    process.exit(1);
+  }
+
+  const configPath = join(H, '.codex', 'config.toml');
+
+  // Use the currently-running node binary — guaranteed to be the right version.
+  // On Windows TOML strings need backslashes doubled.
+  const nodeExec = process.execPath.replace(/\\/g, '\\\\');
+  const serverPath = join(ROOT, 'src', 'server.js').replace(/\\/g, '\\\\');
+
+  const block = [
+    '[mcp_servers.what-next]',
+    `command = "${nodeExec}"`,
+    `args = ["${serverPath}"]`,
+    'tool_timeout_sec = 20',
+    '',
+    '[mcp_servers.what-next.env]',
+    'WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"',
+    `WHATNEXT_API_KEY = "${apiKey}"`,
+  ].join('\n');
+
+  let content = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+
+  if (content.includes('[mcp_servers.what-next]')) {
+    // Remove the existing section (header + all sub-keys) then re-append.
+    // This handles re-runs and key updates without touching the rest of the file.
+    const lines = content.split('\n');
+    const start = lines.findIndex(l => l.startsWith('[mcp_servers.what-next]'));
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      // Stop at the next top-level section that isn't a sub-key of this one
+      if (lines[i].startsWith('[') && !lines[i].startsWith('[mcp_servers.what-next.')) {
+        end = i;
+        break;
+      }
+    }
+    const trimmed = [...lines.slice(0, start), ...lines.slice(end)].join('\n').trimEnd();
+    content = trimmed ? trimmed + '\n\n' : '';
+  } else {
+    content = content.trimEnd() ? content.trimEnd() + '\n\n' : '';
+  }
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, content + block + '\n');
+
+  console.log('\nWhat Next added to Codex');
+  console.log(`  Config: ${configPath}`);
+  console.log('\nRestart VS Code (or open a new Codex CLI session), then try:');
+  console.log('  get_context');
+  console.log('  dump_session');
+  console.log('  search_memories "your query"\n');
+  process.exit(0);
+}
+
 // ─── Config file paths per client per platform ───────────────────────────────
 if (!resolveConfigPath(client, process.platform, H, process.env.APPDATA, process.env.XDG_CONFIG_HOME)) {
   console.error(`\nUnknown client: "${client}"`);
-  console.error('Supported: claude, vscode, copilot, cursor, windsurf, openclaw\n');
+  console.error('Supported: claude, vscode, copilot, cursor, windsurf, codex, openclaw\n');
   process.exit(1);
 }
 

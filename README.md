@@ -55,10 +55,15 @@ npm install
 **2. Recommended: run the installer (all platforms)**
 
 ```bash
-node bin/install.js --client vscode --key bak_xxx
+# Claude Desktop
+node bin/install.js --client claude  --key bak_xxx
+# VS Code / GitHub Copilot
+node bin/install.js --client vscode  --key bak_xxx
+# VS Code Codex extension or Codex CLI
+node bin/install.js --client codex   --key bak_xxx
 ```
 
-The installer writes the correct MCP config path for your OS automatically.
+The installer writes the correct config file for your tool and OS automatically.
 
 **3. Add to Claude Desktop (manual option)**
 
@@ -97,6 +102,23 @@ Edit `~/Library/Application Support/Code/User/mcp.json`:
   }
 }
 ```
+
+**4b. Add to VS Code Codex extension or Codex CLI (manual option)**
+
+Both the VS Code Codex extension (`openai.chatgpt`) and the Codex CLI agent read the same file: `~/.codex/config.toml`. Append this block:
+
+```toml
+[mcp_servers.what-next]
+command = "node"
+args = ["/path/to/what-next/src/server.js"]
+tool_timeout_sec = 20
+
+[mcp_servers.what-next.env]
+WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"
+WHATNEXT_API_KEY = "your_api_key_here"
+```
+
+Replace `/path/to/what-next/src/server.js` with the absolute path where you cloned the repo.
 
 **5. Restart Claude Desktop / VS Code**
 

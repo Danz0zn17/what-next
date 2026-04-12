@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.4.0] — 2026-04-12
+
+### Added
+- **OpenAI Codex support** — `--client codex` installer option writes What Next into `~/.codex/config.toml`, covering both the VS Code Codex extension (`openai.chatgpt`) and the Codex CLI agent. Both surfaces share the same config file, so one installer run connects both.
+- **Safe TOML patching** — the installer reads the existing `~/.codex/config.toml` (preserving all other settings like `model`, `personality`, and plugins), appends the `[mcp_servers.what-next]` block, and cleanly replaces it on re-runs without touching anything else.
+- **Landing page updated** — OpenAI Codex surface card added (Live), hero stat updated to 6 surfaces, setup code block includes `--client codex`.
+- **README updated** — VS Code Codex and Codex CLI manual setup section added with TOML snippet.
+
+---
+
 ## [1.3.0] — 2026-04-12
 
 ### Added
