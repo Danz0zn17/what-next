@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.0] — 2026-04-12
+
+### Added
+- **15-second tool timeout** — every MCP tool handler is now wrapped with `withTimeout()`. If a cloud call stalls, the tool returns a friendly error within 15s instead of hanging VS Code/Claude indefinitely. Slow responses (>3s) are logged as WARN to stderr.
+- **Per-tool error logging** — all tool errors and timeouts are written to stderr with ISO timestamps and tool name, visible in `~/Library/Logs/what-next/api-error.log` when running via LaunchAgent.
+- **Hermes health-check watchdog** (`hermes/src/health-check.js`) — checks the REST API (`localhost:3747`), cloud Railway endpoint, and Hermes gateway LaunchAgent every 5 minutes. Auto-kickstarts dead LaunchAgents and logs recovery status to `~/Library/Logs/hermes/health.log`.
+- **`com.hermes.healthcheck` LaunchAgent** — registers the health watchdog to run at login + every 5 minutes with `KeepAlive` off (fire-and-forget cron style).
+- **`npm run health` script in Hermes** — run the watchdog once manually from the terminal.
+
+### Fixed
+- **Security: `path-to-regexp` CVE** — updated transitive dependency to resolve 1 high + 2 moderate ReDoS vulnerabilities (GHSA-j3q9-mxjg-w52f, GHSA-27v5-c462-wpq7) in the Express router.
+
+### Testing
+- 4 new tests in `test/server-timeout.test.js` covering: successful pass-through, error catch with friendly message, timeout path, and arg forwarding.
+
+---
+
 ## [1.2.0] — 2026-04-11
 
 ### Added

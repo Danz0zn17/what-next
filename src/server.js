@@ -10,8 +10,39 @@ import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '1.2.0',
+  version: '1.3.0',
 });
+
+// ─── Tool timeout + error logging helpers ─────────────────────────────────────
+const TOOL_TIMEOUT_MS = 15_000;
+
+function log(level, toolName, message) {
+  const ts = new Date().toISOString();
+  process.stderr.write(`[what-next MCP] ${ts} [${level}] ${toolName}: ${message}\n`);
+}
+
+function withTimeout(toolName, handlerFn) {
+  return async (args) => {
+    const start = Date.now();
+    const timer = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Tool timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS)
+    );
+    try {
+      const result = await Promise.race([handlerFn(args), timer]);
+      const elapsed = Date.now() - start;
+      if (elapsed > 3_000) log('WARN', toolName, `slow response: ${elapsed}ms`);
+      return result;
+    } catch (err) {
+      log('ERROR', toolName, err.message);
+      return {
+        content: [{
+          type: 'text',
+          text: `[what-next] ⚠️ ${toolName} failed: ${err.message}\n\nThe MCP server is running but encountered an error. Your session data is safe in local SQLite. You can retry or use the REST API at http://localhost:3747`,
+        }],
+      };
+    }
+  };
+}
 
 // ─── Startup: sync any pending gists to cloud ─────────────────────────────────
 if (cloud.isEnabled()) {
@@ -53,7 +84,7 @@ server.tool(
     next_steps: z.string().optional().describe('What to pick up next session'),
     tags: z.string().optional().describe('Comma-separated tags e.g. "react,auth,api,bug-fix"'),
   },
-  async (args) => {
+  withTimeout('dump_session', async (args) => {
     let source = 'cloud';
 
     // Try cloud first
@@ -82,14 +113,14 @@ server.tool(
         text: `Session dumped [${sourceLabel}] (local id: ${id})\nProject: ${args.project}\nSummary: ${args.summary}`,
       }],
     };
-  }
+  })
 );
 
 // ─── TOOL: get_context ───────────────────────────────────────────────────────
 server.tool(
   'get_context',
   {},
-  async () => {
+  withTimeout('get_context', async () => {
     let context;
     let source = 'cloud';
 
@@ -141,7 +172,7 @@ server.tool(
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
-  }
+  })
 );
 
 // ─── TOOL: search_memories ────────────────────────────────────────────────────
@@ -151,7 +182,7 @@ server.tool(
     query: z.string().describe('Search query — can be a technology, concept, project name, or anything you remember working on'),
     limit: z.number().optional().default(5).describe('Max results to return'),
   },
-  async ({ query, limit }) => {
+  withTimeout('search_memories', async ({ query, limit }) => {
     let results;
     let source = 'cloud';
 
@@ -203,7 +234,7 @@ server.tool(
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
-  }
+  })
 );
 
 // ─── TOOL: get_project ────────────────────────────────────────────────────────
@@ -212,7 +243,7 @@ server.tool(
   {
     name: z.string().describe('Project name to retrieve history for'),
   },
-  async ({ name }) => {
+  withTimeout('get_project', async ({ name }) => {
     let project;
     let source = 'cloud';
 
@@ -260,14 +291,14 @@ server.tool(
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
-  }
+  })
 );
 
 // ─── TOOL: list_projects ─────────────────────────────────────────────────────
 server.tool(
   'list_projects',
   {},
-  async () => {
+  withTimeout('list_projects', async () => {
     let projects;
     let source = 'cloud';
 
@@ -298,7 +329,7 @@ server.tool(
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
-  }
+  })
 );
 
 // ─── TOOL: add_fact ───────────────────────────────────────────────────────────
@@ -310,7 +341,7 @@ server.tool(
     project: z.string().optional().describe('Associate with a project, or leave blank for global facts'),
     tags: z.string().optional().describe('Comma-separated tags'),
   },
-  async (args) => {
+  withTimeout('add_fact', async (args) => {
     let source = 'cloud';
 
     if (cloud.isEnabled()) {
@@ -335,7 +366,7 @@ server.tool(
         text: `Fact stored [${source}] (local id: ${id}) [${scope}]\nCategory: ${args.category}\n${args.content}`,
       }],
     };
-  }
+  })
 );
 
 // ─── TOOL: semantic_search ────────────────────────────────────────────────────
@@ -346,7 +377,7 @@ server.tool(
     query: z.string().describe('What you\'re looking for — describe it naturally, no need for exact keywords'),
     limit: z.number().optional().default(5).describe('Max results to return'),
   },
-  async ({ query, limit }) => {
+  withTimeout('semantic_search', async ({ query, limit }) => {
     // Try cloud semantic search first
     if (cloud.isEnabled()) {
       try {
@@ -407,7 +438,7 @@ server.tool(
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };
-  }
+  })
 );
 
 // ─── TOOL: edit_session ───────────────────────────────────────────────────────
@@ -422,7 +453,7 @@ server.tool(
     next_steps: z.string().optional().describe('Updated next steps'),
     tags: z.string().optional().describe('Updated comma-separated tags'),
   },
-  async ({ id, ...updates }) => {
+  withTimeout('edit_session', async ({ id, ...updates }) => {
     const changed = editSession(id, updates);
     if (!changed) {
       return { content: [{ type: 'text', text: `Session ${id} not found or no fields to update.` }] };
@@ -434,7 +465,7 @@ server.tool(
       generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
     }
     return { content: [{ type: 'text', text: `Session ${id} updated.` }] };
-  }
+  })
 );
 
 // ─── TOOL: whats_next ─────────────────────────────────────────────────────────
@@ -443,7 +474,7 @@ server.tool(
   {
     limit: z.number().optional().default(8).describe('Max number of projects to include'),
   },
-  async ({ limit }) => {
+  withTimeout('whats_next', async ({ limit }) => {
     const items = getWhatsNext(limit);
     if (items.length === 0) {
       return { content: [{ type: 'text', text: 'No open next steps found.' }] };
@@ -455,7 +486,7 @@ server.tool(
       lines.push('');
     }
     return { content: [{ type: 'text', text: lines.join('\n') }] };
-  }
+  })
 );
 
 // ─── TOOL: send_feedback ─────────────────────────────────────────────────────
@@ -466,7 +497,7 @@ server.tool(
     type: z.enum(['bug', 'feature', 'general']).optional().describe('Type of feedback'),
     context: z.string().optional().describe('Any extra context — what you were doing, what you expected'),
   },
-  async (args) => {
+  withTimeout('send_feedback', async (args) => {
     if (!cloud.isEnabled()) {
       return { content: [{ type: 'text', text: 'Cloud not configured — feedback could not be sent.' }] };
     }
@@ -476,7 +507,7 @@ server.tool(
     } catch {
       return { content: [{ type: 'text', text: 'Could not reach cloud — feedback not sent.' }] };
     }
-  }
+  })
 );
 
 // ─── Start ────────────────────────────────────────────────────────────────────

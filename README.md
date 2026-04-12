@@ -196,6 +196,31 @@ For always-on local API on Windows, create a Task Scheduler task that runs:
 - Add arguments: `C:\Users\<you>\what-next\src\api-server.js`
 - Trigger: At log on
 
+**MCP tool hangs or `dump_session` is slow**
+
+Since v1.3.0, every MCP tool enforces a **15-second timeout**. If the cloud is unreachable the tool returns a clear error message immediately — your data is always safe in local SQLite and available via the REST API.
+
+If `dump_session` hangs in VS Code Copilot or Claude Desktop:
+1. Wait — it will return an error within 15s (not forever)
+2. If it keeps happening: **start a new chat** — VS Code/Claude spawns a fresh MCP stdio process per conversation
+3. Check the MCP error log: `cat ~/Library/Logs/what-next/api-error.log | tail -20`
+4. Check cloud reachability: `curl https://what-next-production.up.railway.app/health`
+
+**macOS auto-watchdog (Hermes users)**
+
+If you're running Hermes, the `com.hermes.healthcheck` LaunchAgent monitors the whole stack every 5 minutes and auto-restarts dead LaunchAgents:
+
+```bash
+# Check watchdog status
+launchctl list com.hermes.healthcheck
+
+# View watchdog log
+cat ~/Library/Logs/hermes/health.log | tail -30
+
+# Run a manual health check immediately
+cd ~/Documents/projects/hermes && npm run health
+```
+
 **Cloud health check**
 ```bash
 curl https://what-next-production.up.railway.app/health

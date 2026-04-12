@@ -1,6 +1,6 @@
 {
   "name": "what-next",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "What Next \u2014 AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
   "type": "module",
   "main": "src/server.js",
