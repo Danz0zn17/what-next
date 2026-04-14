@@ -428,7 +428,7 @@ async function sendWelcomeEmail({ name, email, apiKey }) {
     "mcpServers": {<br>
     &nbsp;&nbsp;"what-next": {<br>
     &nbsp;&nbsp;&nbsp;&nbsp;"command": "node",<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;"args": ["~/what-next/src/server.js"],<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;"args": ["~/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"],<br>
     &nbsp;&nbsp;&nbsp;&nbsp;"env": {<br>
     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"WHATNEXT_CLOUD_URL": "https://what-next-production.up.railway.app",<br>
     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"WHATNEXT_API_KEY": "${apiKey}"<br>

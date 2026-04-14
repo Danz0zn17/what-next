@@ -53,7 +53,7 @@ async function api(path, opts = {}) {
   } catch {
     console.error(col('red', `\nCannot reach What Next at ${BASE}.`));
     console.error(dim('  Start it with: launchctl start com.whatnextai.api'));
-    console.error(dim('  Or:            node ~/what-next/src/api-server.js\n'));
+    console.error(dim('  Or:            node ~/what-next/bin/local-api.js\n'));
     process.exit(1);
   }
   const text = await res.text();
@@ -328,7 +328,7 @@ ${bold('Examples:')}
 
 ${bold('Local service not running?')}
   macOS:   ${dim('launchctl start com.whatnextai.api')}
-  Other:   ${dim('node ~/what-next/src/api-server.js')}
+  Other:   ${dim('node ~/what-next/bin/local-api.js')}
 `);
 }
 

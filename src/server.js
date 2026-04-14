@@ -1,5 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext } from './db.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
@@ -15,10 +18,68 @@ const server = new McpServer({
 
 // ─── Tool timeout + error logging helpers ─────────────────────────────────────
 const TOOL_TIMEOUT_MS = 15_000;
+const PREFER_LOCAL = process.env.WHATNEXT_PREFER_LOCAL !== '0';
+const CLOUD_SYNC_MODE = process.env.WHATNEXT_CLOUD_SYNC_MODE || 'background';
+const AUDIT_LOG_DIR = process.env.WHATNEXT_AUDIT_LOG_DIR
+  || (process.platform === 'darwin'
+    ? join(homedir(), 'Library', 'Logs', 'what-next')
+    : join(homedir(), '.what-next', 'logs'));
+const MCP_AUDIT_LOG_FILE = join(AUDIT_LOG_DIR, 'mcp-audit.log');
+
+try {
+  mkdirSync(AUDIT_LOG_DIR, { recursive: true });
+} catch {
+  // Logging must never block MCP startup.
+}
 
 function log(level, toolName, message) {
   const ts = new Date().toISOString();
-  process.stderr.write(`[what-next MCP] ${ts} [${level}] ${toolName}: ${message}\n`);
+  const line = `[what-next MCP] ${ts} [${level}] ${toolName}: ${message}\n`;
+  process.stderr.write(line);
+  try {
+    appendFileSync(MCP_AUDIT_LOG_FILE, line);
+  } catch {
+    // Ignore audit-log write failures so tooling never breaks on logging.
+  }
+}
+
+function logAudit(toolName, message) {
+  log('INFO', toolName, message);
+}
+
+function syncSessionInBackground(args, localId) {
+  if (!cloud.isEnabled()) return;
+  queueMicrotask(async () => {
+    try {
+      await cloud.postSession(args);
+      logAudit('dump_session', `cloud sync ok for local session ${localId}`);
+    } catch (err) {
+      if (err instanceof CloudUnavailableError) {
+        log('WARN', 'dump_session', `cloud unavailable for local session ${localId}; queued gist fallback`);
+        dumpToGist(args).catch((gistErr) => {
+          log('ERROR', 'dump_session', `gist fallback failed for local session ${localId}: ${gistErr.message}`);
+        });
+        return;
+      }
+      log('ERROR', 'dump_session', `cloud sync failed for local session ${localId}: ${err.message}`);
+    }
+  });
+}
+
+function syncFactInBackground(args, localId) {
+  if (!cloud.isEnabled()) return;
+  queueMicrotask(async () => {
+    try {
+      await cloud.postFact(args);
+      logAudit('add_fact', `cloud sync ok for local fact ${localId}`);
+    } catch (err) {
+      if (err instanceof CloudUnavailableError) {
+        log('WARN', 'add_fact', `cloud unavailable for local fact ${localId}`);
+        return;
+      }
+      log('ERROR', 'add_fact', `cloud sync failed for local fact ${localId}: ${err.message}`);
+    }
+  });
 }
 
 function withTimeout(toolName, handlerFn) {
@@ -85,28 +146,32 @@ server.tool(
     tags: z.string().optional().describe('Comma-separated tags e.g. "react,auth,api,bug-fix"'),
   },
   withTimeout('dump_session', async (args) => {
-    let source = 'cloud';
-
-    // Try cloud first
-    if (cloud.isEnabled()) {
-      try {
-        await cloud.postSession(args);
-      } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
-        source = 'local';
-        // Gist fallback (fire and forget — gist-client queues it)
-        dumpToGist(args).catch(() => {});
-      }
-    } else {
-      source = 'local';
-    }
-
-    // Always write to local SQLite as well (offline cache + embeddings)
     const id = addSession(args);
     const text = [args.summary, args.what_was_built, args.decisions, args.next_steps, args.tags].filter(Boolean).join(' ');
     generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
+    logAudit('dump_session', `local write complete for session ${id} (${args.project})`);
 
-    const sourceLabel = source === 'cloud' ? 'cloud + local' : 'local only (cloud unreachable)';
+    let sourceLabel = 'local first';
+
+    if (!PREFER_LOCAL && cloud.isEnabled() && CLOUD_SYNC_MODE !== 'background') {
+      try {
+        await cloud.postSession(args);
+        sourceLabel = 'cloud + local';
+      } catch (err) {
+        if (err instanceof CloudUnavailableError) {
+          sourceLabel = 'local only (cloud unreachable)';
+          dumpToGist(args).catch((gistErr) => {
+            log('ERROR', 'dump_session', `gist fallback failed for local session ${id}: ${gistErr.message}`);
+          });
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      syncSessionInBackground(args, id);
+      if (cloud.isEnabled()) sourceLabel = 'local first, cloud sync queued';
+    }
+
     return {
       content: [{
         type: 'text',
@@ -342,22 +407,24 @@ server.tool(
     tags: z.string().optional().describe('Comma-separated tags'),
   },
   withTimeout('add_fact', async (args) => {
-    let source = 'cloud';
-
-    if (cloud.isEnabled()) {
-      try {
-        await cloud.postFact(args);
-      } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
-        source = 'local';
-      }
-    } else {
-      source = 'local';
-    }
-
     const id = addFact(args);
     const text = [args.category, args.content, args.tags].filter(Boolean).join(' ');
     generateEmbedding(text).then(emb => storeEmbedding('fact', id, emb)).catch(() => {});
+    logAudit('add_fact', `local write complete for fact ${id}`);
+
+    let source = 'local first';
+    if (!PREFER_LOCAL && cloud.isEnabled() && CLOUD_SYNC_MODE !== 'background') {
+      try {
+        await cloud.postFact(args);
+        source = 'cloud + local';
+      } catch (err) {
+        if (!(err instanceof CloudUnavailableError)) throw err;
+        source = 'local only (cloud unreachable)';
+      }
+    } else {
+      syncFactInBackground(args, id);
+      if (cloud.isEnabled()) source = 'local first, cloud sync queued';
+    }
 
     const scope = args.project ? `project: ${args.project}` : 'global';
     return {

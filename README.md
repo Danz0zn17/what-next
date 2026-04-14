@@ -11,6 +11,8 @@
 
 No more copy-pasting context. No more re-explaining your stack. It just knows.
 
+Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
+
 ---
 
 ## How It Works
@@ -18,9 +20,9 @@ No more copy-pasting context. No more re-explaining your stack. It just knows.
 What Next runs a local MCP server on your machine (macOS, Windows, or Linux). Every AI tool connects to it. When you finish a session, your AI dumps a summary. When you start a new one, it loads it back. All of it synced to the cloud so your memory is safe even if your machine dies.
 
 ```
-Your AI tools  ──MCP──►  What Next (local)  ──HTTPS──►  Cloud (Railway)
-(Claude, VS Code,         runs on your Mac               Postgres, isolated
- Copilot, Hermes)         SQLite cache                   per API key
+Your AI tools  ──MCP──►  What Next (local-first)  ──background sync──►  Cloud (Railway)
+(Claude, VS Code,         runs on your Mac                 backup only
+ Copilot, Hermes)         SQLite source of truth
 ```
 
 ---
@@ -74,8 +76,10 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "what-next": {
       "command": "node",
-      "args": ["~/what-next/src/server.js"],
+      "args": ["~/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"],
       "env": {
+        "WHATNEXT_PREFER_LOCAL": "1",
+        "WHATNEXT_CLOUD_SYNC_MODE": "background",
         "WHATNEXT_CLOUD_URL": "https://what-next-production.up.railway.app",
         "WHATNEXT_API_KEY": "your_api_key_here"
       }
@@ -93,8 +97,10 @@ Edit `~/Library/Application Support/Code/User/mcp.json`:
   "servers": {
     "what-next": {
       "command": "node",
-      "args": ["~/what-next/src/server.js"],
+      "args": ["~/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"],
       "env": {
+        "WHATNEXT_PREFER_LOCAL": "1",
+        "WHATNEXT_CLOUD_SYNC_MODE": "background",
         "WHATNEXT_CLOUD_URL": "https://what-next-production.up.railway.app",
         "WHATNEXT_API_KEY": "your_api_key_here"
       }
@@ -110,15 +116,17 @@ Both the VS Code Codex extension (`openai.chatgpt`) and the Codex CLI agent read
 ```toml
 [mcp_servers.what-next]
 command = "node"
-args = ["/path/to/what-next/src/server.js"]
+args = ["/path/to/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"]
 tool_timeout_sec = 20
 
 [mcp_servers.what-next.env]
+WHATNEXT_PREFER_LOCAL = "1"
+WHATNEXT_CLOUD_SYNC_MODE = "background"
 WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"
 WHATNEXT_API_KEY = "your_api_key_here"
 ```
 
-Replace `/path/to/what-next/src/server.js` with the absolute path where you cloned the repo.
+Replace `/path/to/what-next/bin/bootstrap-entry.js` with the absolute path where you cloned the repo.
 
 **5. Restart Claude Desktop / VS Code**
 
@@ -189,9 +197,9 @@ It handles the rest.
 
 **Tools don't appear in Claude/VS Code**
 - Restart the app completely after running the installer — MCP config is only read at startup
-- Check the path: `~/what-next/src/server.js` — if you cloned somewhere else, update the path
+- Check the path: `~/what-next/bin/bootstrap-entry.js` — if you cloned somewhere else, update the path
 - Make sure `WHATNEXT_API_KEY` is set to your key (from the welcome email)
-- On Windows, use an absolute path like `C:\Users\<you>\what-next\src\server.js`
+- On Windows, use an absolute path like `C:\Users\<you>\what-next\bin\bootstrap-entry.js`
 
 **Linux: MCP tools not appearing after install**
 - Claude Desktop on Linux is not officially supported — config paths vary by build
@@ -209,8 +217,9 @@ It handles the rest.
 - Double-check you replaced `your_api_key_here` with the actual key
 
 **Session not syncing to cloud**
-- Check your Internet connection
-- The local SQLite still works offline — it'll sync next time
+- Local SQLite is still the primary store — your dump already succeeded
+- Cloud sync is backup-only and retries in the background
+- Check `~/Library/Logs/what-next/mcp-audit.log` or `bootstrap.log` for failures
 
 **`search_memories` crashes or returns nothing for certain queries**
 - Postgres full-text search rejects special characters like `:`, `(`, `)`, `!`, `@`
@@ -237,23 +246,25 @@ curl "http://localhost:3747/sync/status"
 ```
 If the local service is down:
 - macOS: `launchctl start com.whatnextai.api`
-- Windows PowerShell: `node "$env:USERPROFILE\what-next\src\api-server.js"`
-- Linux: `node ~/what-next/src/api-server.js`
+- Windows PowerShell: `node "$env:USERPROFILE\what-next\bin\local-api.js"`
+- Linux: `node ~/what-next/bin/local-api.js`
 
 For always-on local API on Windows, create a Task Scheduler task that runs:
 - Program/script: `node`
-- Add arguments: `C:\Users\<you>\what-next\src\api-server.js`
+- Add arguments: `C:\Users\<you>\what-next\bin\local-api.js`
 - Trigger: At log on
 
 **MCP tool hangs or `dump_session` is slow**
 
-Since v1.3.0, every MCP tool enforces a **15-second timeout**. If the cloud is unreachable the tool returns a clear error message immediately — your data is always safe in local SQLite and available via the REST API.
+What Next is intended to be local-first. `dump_session` writes to local SQLite immediately and only then queues cloud backup in the background.
 
 If `dump_session` hangs in VS Code Copilot or Claude Desktop:
-1. Wait — it will return an error within 15s (not forever)
+1. Check the bootstrap and audit logs first:
+   `tail -n 40 ~/Library/Logs/what-next/bootstrap.log`
+   `tail -n 40 ~/Library/Logs/what-next/mcp-audit.log`
 2. If it keeps happening: **start a new chat** — VS Code/Claude spawns a fresh MCP stdio process per conversation
-3. Check the MCP error log: `cat ~/Library/Logs/what-next/api-error.log | tail -20`
-4. Check cloud reachability: `curl https://what-next-production.up.railway.app/health`
+3. Check the local API health: `curl http://localhost:3747/health`
+4. Check cloud reachability only for backup sync: `curl https://what-next-production.up.railway.app/health`
 
 **macOS auto-watchdog (Hermes users)**
 
@@ -288,9 +299,11 @@ If you're running [Hermes](https://github.com/Danz0zn17/hermes) as your AI Teleg
 mcp_servers:
   what-next:
     command: node
-    args: ["~/what-next/src/server.js"]
+    args: ["~/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"]
     timeout: 30
     env:
+      WHATNEXT_PREFER_LOCAL: "1"
+      WHATNEXT_CLOUD_SYNC_MODE: "background"
       WHATNEXT_CLOUD_URL: "https://what-next-production.up.railway.app"
       WHATNEXT_API_KEY: "your_api_key_here"
 ```
@@ -363,4 +376,3 @@ All data is isolated to your API key and stored in a private Postgres database o
 ## Stack
 
 Node.js · SQLite · Postgres · MCP SDK · Railway · LaunchAgent (macOS) / Task Scheduler (Windows) / systemd (Linux optional)
-

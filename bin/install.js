@@ -78,15 +78,17 @@ if (client === 'codex') {
   // Use the currently-running node binary — guaranteed to be the right version.
   // On Windows TOML strings need backslashes doubled.
   const nodeExec = process.execPath.replace(/\\/g, '\\\\');
-  const serverPath = join(ROOT, 'src', 'server.js').replace(/\\/g, '\\\\');
-
   const block = [
     '[mcp_servers.what-next]',
     `command = "${nodeExec}"`,
-    `args = ["${serverPath}"]`,
+    `args = ["${join(ROOT, 'bin', 'bootstrap-entry.js').replace(/\\/g, '\\\\')}", "src/server.js", "mcp"]`,
     'tool_timeout_sec = 20',
     '',
     '[mcp_servers.what-next.env]',
+    'WHATNEXT_PREFER_LOCAL = "1"',
+    'WHATNEXT_CLOUD_SYNC_MODE = "background"',
+    'WHATNEXT_BOOT_RETRIES = "12"',
+    'WHATNEXT_BOOT_DELAY_MS = "750"',
     'WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"',
     `WHATNEXT_API_KEY = "${apiKey}"`,
   ].join('\n');
@@ -160,9 +162,13 @@ const isVscode = isVscodeLikeClient(client);
 const serverKey = isVscode ? 'servers' : 'mcpServers';
 
 const serverEntry = {
-  command: 'node',
-  args: [join(ROOT, 'src/server.js')],
+  command: process.execPath,
+  args: [join(ROOT, 'bin', 'bootstrap-entry.js'), 'src/server.js', 'mcp'],
   env: {
+    WHATNEXT_PREFER_LOCAL: '1',
+    WHATNEXT_CLOUD_SYNC_MODE: 'background',
+    WHATNEXT_BOOT_RETRIES: '12',
+    WHATNEXT_BOOT_DELAY_MS: '750',
     WHATNEXT_API_KEY: apiKey,
     WHATNEXT_CLOUD_URL: CLOUD_URL,
   },
@@ -197,7 +203,7 @@ console.log('  dump_session');
 console.log('  search_memories "your query"\n');
 
 if (platform === 'win32') {
-  const apiPath = join(ROOT, 'src/api-server.js').replace(/\\/g, '\\\\');
+  const apiPath = join(ROOT, 'bin', 'local-api.js').replace(/\\/g, '\\\\');
   console.log('Windows tip (optional local web UI/API):');
   console.log(`  node "${apiPath}"`);
   console.log('To keep it always-on, create a Task Scheduler task:');
@@ -207,7 +213,7 @@ if (platform === 'win32') {
   console.log('macOS tip (optional local web UI/API):');
   console.log('  launchctl start com.whatnextai.api\n');
 } else {
-  const apiPath = join(ROOT, 'src/api-server.js');
+  const apiPath = join(ROOT, 'bin', 'local-api.js');
   console.log('Linux notes:');
   console.log(`  Config written to: ${configPath}`);
   if (client === 'claude') {
