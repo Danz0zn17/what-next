@@ -18,6 +18,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'fs';
+import { execSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
@@ -202,6 +203,110 @@ console.log('  get_context');
 console.log('  dump_session');
 console.log('  search_memories "your query"\n');
 
+// ─── macOS LaunchAgent setup ─────────────────────────────────────────────────
+// Writes com.whatnextai.api.plist to ~/Library/LaunchAgents/ and loads it so
+// the REST API starts on every login and auto-restarts on crash.
+// Safe to re-run: unloads the old service before rewriting the plist.
+
+function setupMacOSLaunchAgent(key) {
+  const nodeExec = process.execPath;
+  const launchAgentsDir = join(H, 'Library', 'LaunchAgents');
+  const logsDir = join(H, 'Library', 'Logs', 'what-next');
+  const plistPath = join(launchAgentsDir, 'com.whatnextai.api.plist');
+  const startScript = join(ROOT, 'start-api.sh');
+  const bootstrapEntry = join(ROOT, 'bin', 'bootstrap-entry.js');
+
+  // Use start-api.sh if it exists (includes self-heal steps), else fall back to bootstrap-entry.js
+  const useStartScript = existsSync(startScript);
+  const programArgs = useStartScript
+    ? ['/bin/zsh', startScript]
+    : [nodeExec, bootstrapEntry, 'src/api-server.js', 'api'];
+
+  const plistXml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.whatnextai.api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+${programArgs.map(a => `        <string>${a}</string>`).join('\n')}
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>${logsDir}/api.log</string>
+    <key>StandardErrorPath</key>
+    <string>${logsDir}/api-error.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>${ROOT}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${H}</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>WHATNEXT_CLOUD_URL</key>
+        <string>${CLOUD_URL}</string>
+        <key>WHATNEXT_API_KEY</key>
+        <string>${key}</string>
+        <key>WHATNEXT_PREFER_LOCAL</key>
+        <string>1</string>
+        <key>WHATNEXT_CLOUD_SYNC_MODE</key>
+        <string>background</string>
+        <key>WHATNEXT_PORT</key>
+        <string>3747</string>
+        <key>WHATNEXT_BOOT_RETRIES</key>
+        <string>12</string>
+        <key>WHATNEXT_BOOT_DELAY_MS</key>
+        <string>750</string>
+    </dict>
+</dict>
+</plist>
+`;
+
+  try {
+    mkdirSync(launchAgentsDir, { recursive: true });
+    mkdirSync(logsDir, { recursive: true });
+
+    // Unload existing service gracefully before rewriting plist
+    if (existsSync(plistPath)) {
+      try {
+        execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: 'ignore' });
+      } catch {
+        // Not loaded — that's fine
+      }
+    }
+
+    writeFileSync(plistPath, plistXml);
+
+    // Load and start the service
+    execSync(`launchctl load "${plistPath}"`);
+
+    console.log('\nWhat Next REST API configured as a macOS LaunchAgent');
+    console.log(`  Plist:  ${plistPath}`);
+    console.log(`  Logs:   ${logsDir}/`);
+    console.log('  Port:   http://localhost:3747');
+    console.log('  Status: launchctl list com.whatnextai.api');
+    console.log('  Start:  launchctl start com.whatnextai.api');
+    console.log('  Stop:   launchctl stop com.whatnextai.api\n');
+  } catch (err) {
+    console.error('\nLaunchAgent setup failed:', err.message);
+    console.error('To set it up manually:');
+    console.error(`  launchctl load "${plistPath}"\n`);
+  }
+}
+
 if (platform === 'win32') {
   const apiPath = join(ROOT, 'bin', 'local-api.js').replace(/\\/g, '\\\\');
   console.log('Windows tip (optional local web UI/API):');
@@ -210,8 +315,7 @@ if (platform === 'win32') {
   console.log('  Program/script: node');
   console.log(`  Add arguments: ${apiPath}\n`);
 } else if (platform === 'darwin') {
-  console.log('macOS tip (optional local web UI/API):');
-  console.log('  launchctl start com.whatnextai.api\n');
+  setupMacOSLaunchAgent(apiKey);
 } else {
   const apiPath = join(ROOT, 'bin', 'local-api.js');
   console.log('Linux notes:');

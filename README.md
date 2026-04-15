@@ -67,6 +67,8 @@ node bin/install.js --client codex   --key bak_xxx
 
 The installer writes the correct config file for your tool and OS automatically.
 
+On **macOS**, the installer also sets up `com.whatnextai.api` as a LaunchAgent - the REST API will start at every login and auto-restart on crash. No extra steps needed.
+
 **3. Add to Claude Desktop (manual option)**
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -245,7 +247,7 @@ curl "http://localhost:3747/sync/status"
 # → last_cloud_sync timestamp and pending gists count
 ```
 If the local service is down:
-- macOS: `launchctl start com.whatnextai.api`
+- macOS: `launchctl start com.whatnextai.api` (LaunchAgent auto-restarts on crash and every reboot)
 - Windows PowerShell: `node "$env:USERPROFILE\what-next\bin\local-api.js"`
 - Linux: `node ~/what-next/bin/local-api.js`
 
@@ -253,6 +255,8 @@ For always-on local API on Windows, create a Task Scheduler task that runs:
 - Program/script: `node`
 - Add arguments: `C:\Users\<you>\what-next\bin\local-api.js`
 - Trigger: At log on
+
+**macOS self-healing on boot**: The LaunchAgent runs `start-api.sh` on every login. If source code is missing it restores from GitHub; if node_modules are gone it runs `npm install`; if the DB is absent it re-initialises the schema. Your What Next is resilient to accidental deletions.
 
 **MCP tool hangs or `dump_session` is slow**
 

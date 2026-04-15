@@ -39,6 +39,10 @@ if (!existsSync(DB_PATH)) {
 
 import { startApiServer } from './api.js';
 import { startPeriodicSync } from './sync.js';
+import { checkForUpdate } from '../bin/update-check.js';
 
 startApiServer();
 startPeriodicSync();
+
+// Non-blocking update check — shows once per session via flag file dedup
+checkForUpdate().catch(() => {});

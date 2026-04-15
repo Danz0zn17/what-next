@@ -9,6 +9,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.0] - 2026-04-15
+
+### Added
+- **Self-healing LaunchAgent** (`start-api.sh`): 5-step recovery chain on every boot - git-restore source from GitHub if missing, npm install if node_modules gone, DB init if database absent, network wait up to 15s, then launch via bootstrap-entry.js
+- **`bin/update-check.js`**: version comparison module - fetches latest GitHub release, compares semver, writes a one-time notice to stderr (flag file dedup so it only shows once per session). Called by `api-server.js` on startup
+- **macOS LaunchAgent auto-setup in installer**: `node bin/install.js --client claude --key bak_xxx` now automatically writes `com.whatnextai.api.plist` to `~/Library/LaunchAgents/`, creates log dirs, and runs `launchctl load`. Safe to re-run (unloads old service first). Uses `start-api.sh` if present for full self-heal chain
+- **Proactive Telegram health alerts** (`hermes/health-check.js` rewrite): Telegram notifications for service failures, disk warnings, recovery, and boot summary. Alert dedup via `/tmp` flag files. 45s grace period on boot to avoid false positives
+- **DB integrity check on startup** (`api-server.js`): `PRAGMA quick_check` runs before serving any requests - crashes loudly if DB is corrupt so LaunchAgent restarts rather than serving bad data
+
+### Fixed
+- **onnxruntime native bindings crash**: `sync.js` and `api.js` now dynamically import `embeddings.js` with graceful degradation - vector indexing and semantic search are skipped cleanly when native bindings are missing, rather than crashing the server
+- **False boot failures in health check**: replaced fixed 3s sleep after kickstart with 15s polling loop (1.5s interval), matching the actual bootstrap-entry.js retry window
+- **Unregistered LaunchAgent kickstart**: health-check now loads the plist via `launchctl load` before retrying kickstart when a service is unregistered
+
+### Changed
+- LaunchAgent plist updated to invoke `bootstrap-entry.js` (EAGAIN retry wrapper) instead of `local-api.js` directly; `ThrottleInterval` raised to 15s; boot retry env vars added (`WHATNEXT_BOOT_RETRIES=12`, `WHATNEXT_BOOT_DELAY_MS=750`)
+- `McpServer` version field bumped to `1.6.0`
+
+---
+
 ## [1.5.1] — 2026-04-12
 
 ### Added
