@@ -21,8 +21,18 @@
 
 import { createServer } from 'http';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus } from './db.js';
-import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
+
+// Embeddings require native onnxruntime binaries — degrade gracefully if unavailable
+let generateEmbedding = null;
+let cosineSimilarity = null;
+try {
+  const embMod = await import('./embeddings.js');
+  generateEmbedding = embMod.generateEmbedding;
+  cosineSimilarity = embMod.cosineSimilarity;
+} catch {
+  process.stderr.write('[api] embeddings unavailable (native bindings missing) — semantic search disabled\n');
+}
 
 const PORT = process.env.WHATNEXT_PORT ?? 3747;
 
@@ -628,12 +638,15 @@ export function startApiServer() {
         try { ftsRows = searchMemories(q, limit * 2).sessions; } catch {}
 
         // Semantic results (cosine similarity against all embeddings)
-        const queryEmb = await generateEmbedding(q);
-        const allEmbs = getAllEmbeddings().filter(e => e.rowtype === 'session');
-        const semRows = allEmbs
-          .map(e => ({ id: e.row_id, score: cosineSimilarity(queryEmb, e.embedding) }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit * 2);
+        let semRows = [];
+        if (generateEmbedding && cosineSimilarity) {
+          const queryEmb = await generateEmbedding(q);
+          const allEmbs = getAllEmbeddings().filter(e => e.rowtype === 'session');
+          semRows = allEmbs
+            .map(e => ({ id: e.row_id, score: cosineSimilarity(queryEmb, e.embedding) }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit * 2);
+        }
 
         // Reciprocal Rank Fusion
         const K = 60;
@@ -667,6 +680,7 @@ export function startApiServer() {
 
       // POST /semantic-search — vector similarity search
       if (method === 'POST' && url.pathname === '/semantic-search') {
+        if (!generateEmbedding) return send(res, 503, { error: 'Semantic search unavailable — native embeddings not installed' });
         const body = await parseBody(req);
         if (!body.query) return send(res, 400, { error: 'query field required' });
         const limit = body.limit ?? 10;

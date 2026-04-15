@@ -13,7 +13,15 @@
 
 import * as cloud from './cloud-client.js';
 import { getLastCloudSync, setLastCloudSync, upsertSessionFromCloud, upsertFactFromCloud, storeEmbedding, getAllEmbeddings } from './db.js';
-import { generateEmbedding } from './embeddings.js';
+
+// Embeddings require native onnxruntime binaries — degrade gracefully if unavailable
+let generateEmbedding = null;
+try {
+  const embMod = await import('./embeddings.js');
+  generateEmbedding = embMod.generateEmbedding;
+} catch {
+  process.stderr.write('[sync] embeddings unavailable (native bindings missing) — vector indexing skipped\n');
+}
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -45,14 +53,14 @@ export async function syncFromCloud() {
 
     for (const session of sessions) {
       const localId = upsertSessionFromCloud(session);
-      if (localId && !existingEmbeddings.has(`session:${localId}`)) {
+      if (generateEmbedding && localId && !existingEmbeddings.has(`session:${localId}`)) {
         const text = [session.summary, session.what_was_built, session.decisions, session.next_steps, session.tags].filter(Boolean).join(' ');
         generateEmbedding(text).then(emb => storeEmbedding('session', localId, emb)).catch(() => {});
       }
     }
     for (const fact of facts) {
       const localId = upsertFactFromCloud(fact);
-      if (localId && !existingEmbeddings.has(`fact:${localId}`)) {
+      if (generateEmbedding && localId && !existingEmbeddings.has(`fact:${localId}`)) {
         const text = [fact.category, fact.content, fact.tags].filter(Boolean).join(' ');
         generateEmbedding(text).then(emb => storeEmbedding('fact', localId, emb)).catch(() => {});
       }
