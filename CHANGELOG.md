@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.1] - 2026-04-17
+
+### Fixed
+- **Boot resilience after power failure**: `bootstrap-entry.js` now supports `WHATNEXT_BOOT_INITIAL_DELAY_MS` - a flat sleep before the first import attempt. Set to 25s in the LaunchAgent plist so the FS is stable before Node ESM loading begins. Also bumped default retries to 20 and retry base delay to 2000ms (~7 min total retry window).
+
+---
+
 ## [1.6.0] - 2026-04-15
 
 ### Added

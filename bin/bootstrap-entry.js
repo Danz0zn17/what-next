@@ -11,6 +11,7 @@ const entry = process.argv[2];
 const label = process.argv[3] || 'what-next';
 const retries = Number(process.env.WHATNEXT_BOOT_RETRIES || 12);
 const delayMs = Number(process.env.WHATNEXT_BOOT_DELAY_MS || 750);
+const initialDelayMs = Number(process.env.WHATNEXT_BOOT_INITIAL_DELAY_MS || 0);
 const logDir = process.env.WHATNEXT_AUDIT_LOG_DIR
   || (process.platform === 'darwin'
     ? join(homedir(), 'Library', 'Logs', 'what-next')
@@ -47,6 +48,11 @@ function isRetryable(error) {
 }
 
 const targetUrl = pathToFileURL(resolve(ROOT, entry)).href;
+
+if (initialDelayMs > 0) {
+  log('INFO', `waiting ${initialDelayMs}ms before first attempt (boot delay)`);
+  await sleep(initialDelayMs);
+}
 
 for (let attempt = 1; attempt <= retries; attempt += 1) {
   try {
