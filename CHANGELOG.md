@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.7.0] - 2026-04-17
+
+### Added
+- **Bootstrap self-healing for corrupt/missing node_modules**: `bin/bootstrap-entry.js` now detects `ERR_MODULE_NOT_FOUND` on the first startup attempt, automatically runs `npm install --prefer-offline --no-audit`, and retries. Prevents silent breakage from partially extracted packages or interrupted installs.
+- **Dep integrity check in watchdog**: `bin/healthcheck.js` verifies the MCP SDK marker file exists before checking the API process. If missing, runs `npm install` to restore deps before the REST API health check.
+- **Test: bootstrap self-heal**: `test/bootstrap-selfheal.test.js` covers `ERR_MODULE_NOT_FOUND` detection, npm availability, and a full end-to-end corrupt-and-recover cycle.
+
+### Changed
+- **`dump_session` and `add_fact` cloud sync is now always background**: removed the blocking `await cloud.postSession()` / `await cloud.postFact()` code paths entirely. Cloud sync is always fire-and-forget via `setImmediate` — local SQLite write completes first, MCP response goes over stdio before the HTTP call starts. `PREFER_LOCAL` and `CLOUD_SYNC_MODE` env vars are no longer used for write paths.
+- **`setImmediate` replaces `queueMicrotask` in background sync helpers**: `queueMicrotask` fires before I/O; `setImmediate` fires after, guaranteeing the response pipe flushes before cloud sync begins.
+
+### Fixed
+- Node_modules corruption no longer silently kills the MCP server until a human notices and runs `npm install` manually.
+
+---
+
 ## [1.6.1] - 2026-04-17
 
 ### Fixed

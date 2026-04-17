@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(join(__dirname, '..'));
@@ -47,6 +48,21 @@ function isRetryable(error) {
     || text.includes('operation not permitted');
 }
 
+function repairDeps() {
+  log('WARN', 'missing dependency detected — running npm install to self-heal');
+  const result = spawnSync('npm', ['install', '--prefer-offline', '--no-audit'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+  if (result.status === 0) {
+    log('INFO', 'npm install completed — retrying startup');
+    return true;
+  }
+  log('ERROR', `npm install failed: ${(result.stderr || result.stdout || 'unknown error').trim()}`);
+  return false;
+}
+
 const targetUrl = pathToFileURL(resolve(ROOT, entry)).href;
 
 if (initialDelayMs > 0) {
@@ -61,6 +77,12 @@ for (let attempt = 1; attempt <= retries; attempt += 1) {
     log('INFO', `${entry} imported successfully`);
     break;
   } catch (error) {
+    // Self-heal: if a module is missing (e.g. corrupt node_modules), run npm install once and retry.
+    if (error?.code === 'ERR_MODULE_NOT_FOUND' && attempt === 1) {
+      const repaired = repairDeps();
+      if (repaired) continue;
+      // npm install failed — fall through to normal exit
+    }
     const retryable = isRetryable(error);
     log(retryable ? 'WARN' : 'ERROR', `${error?.stack ?? error?.message ?? error}`);
     if (!retryable || attempt === retries) {

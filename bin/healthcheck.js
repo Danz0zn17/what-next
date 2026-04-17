@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(__dirname, '..');
+const SDK_MARKER = resolve(ROOT, 'node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js');
 
 const port = process.env.WHATNEXT_PORT || '3747';
 const label = process.env.WHATNEXT_LAUNCHD_LABEL || 'com.whatnextai.api';
@@ -31,6 +36,21 @@ async function isHealthy() {
 }
 
 async function main() {
+  // Dependency integrity check — if SDK is missing, heal before checking the API process.
+  if (!existsSync(SDK_MARKER)) {
+    log('WARN', 'critical dependency missing (MCP SDK) — running npm install to self-heal');
+    const result = spawnSync('npm', ['install', '--prefer-offline', '--no-audit'], {
+      cwd: ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    if (result.status === 0) {
+      log('INFO', 'npm install completed — dependency restored');
+    } else {
+      log('ERROR', `npm install failed: ${(result.stderr || result.stdout || 'unknown').trim()}`);
+    }
+  }
+
   if (await isHealthy()) {
     log('INFO', `healthy on port ${port}`);
     return;

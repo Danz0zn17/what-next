@@ -13,13 +13,11 @@ import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '1.6.0',
+  version: '1.7.0',
 });
 
 // ─── Tool timeout + error logging helpers ─────────────────────────────────────
 const TOOL_TIMEOUT_MS = 15_000;
-const PREFER_LOCAL = process.env.WHATNEXT_PREFER_LOCAL !== '0';
-const CLOUD_SYNC_MODE = process.env.WHATNEXT_CLOUD_SYNC_MODE || 'background';
 const AUDIT_LOG_DIR = process.env.WHATNEXT_AUDIT_LOG_DIR
   || (process.platform === 'darwin'
     ? join(homedir(), 'Library', 'Logs', 'what-next')
@@ -49,7 +47,7 @@ function logAudit(toolName, message) {
 
 function syncSessionInBackground(args, localId) {
   if (!cloud.isEnabled()) return;
-  queueMicrotask(async () => {
+  setImmediate(async () => {
     try {
       await cloud.postSession(args);
       logAudit('dump_session', `cloud sync ok for local session ${localId}`);
@@ -68,7 +66,7 @@ function syncSessionInBackground(args, localId) {
 
 function syncFactInBackground(args, localId) {
   if (!cloud.isEnabled()) return;
-  queueMicrotask(async () => {
+  setImmediate(async () => {
     try {
       await cloud.postFact(args);
       logAudit('add_fact', `cloud sync ok for local fact ${localId}`);
@@ -151,26 +149,8 @@ server.tool(
     generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
     logAudit('dump_session', `local write complete for session ${id} (${args.project})`);
 
-    let sourceLabel = 'local first';
-
-    if (!PREFER_LOCAL && cloud.isEnabled() && CLOUD_SYNC_MODE !== 'background') {
-      try {
-        await cloud.postSession(args);
-        sourceLabel = 'cloud + local';
-      } catch (err) {
-        if (err instanceof CloudUnavailableError) {
-          sourceLabel = 'local only (cloud unreachable)';
-          dumpToGist(args).catch((gistErr) => {
-            log('ERROR', 'dump_session', `gist fallback failed for local session ${id}: ${gistErr.message}`);
-          });
-        } else {
-          throw err;
-        }
-      }
-    } else {
-      syncSessionInBackground(args, id);
-      if (cloud.isEnabled()) sourceLabel = 'local first, cloud sync queued';
-    }
+    syncSessionInBackground(args, id);
+    const sourceLabel = cloud.isEnabled() ? 'local, cloud sync queued' : 'local';
 
     return {
       content: [{
@@ -412,19 +392,8 @@ server.tool(
     generateEmbedding(text).then(emb => storeEmbedding('fact', id, emb)).catch(() => {});
     logAudit('add_fact', `local write complete for fact ${id}`);
 
-    let source = 'local first';
-    if (!PREFER_LOCAL && cloud.isEnabled() && CLOUD_SYNC_MODE !== 'background') {
-      try {
-        await cloud.postFact(args);
-        source = 'cloud + local';
-      } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
-        source = 'local only (cloud unreachable)';
-      }
-    } else {
-      syncFactInBackground(args, id);
-      if (cloud.isEnabled()) source = 'local first, cloud sync queued';
-    }
+    syncFactInBackground(args, id);
+    const source = cloud.isEnabled() ? 'local, cloud sync queued' : 'local';
 
     const scope = args.project ? `project: ${args.project}` : 'global';
     return {
