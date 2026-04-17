@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.7.1] - 2026-04-17
+
+### Fixed
+- **`repairDeps` now does a network install for missing native binaries**: previously always used `--prefer-offline`, which could restore the same incomplete tarball from cache and silently fail all 12 retries. Now detects `.node` binary errors specifically and skips the cache entirely, going straight to a network install. Regular missing JS modules still try offline first with network fallback.
+- **`postinstall` now verifies the onnxruntime native binding landed**: any `npm install` that does not produce `onnxruntime_binding.node` for the current platform/arch fails immediately with a clear error message instead of letting users discover it at MCP startup.
+
+---
+
 ## [1.7.0] - 2026-04-17
 
 ### Added

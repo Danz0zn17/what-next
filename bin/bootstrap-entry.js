@@ -48,18 +48,41 @@ function isRetryable(error) {
     || text.includes('operation not permitted');
 }
 
-function repairDeps() {
-  log('WARN', 'missing dependency detected — running npm install to self-heal');
-  const result = spawnSync('npm', ['install', '--prefer-offline', '--no-audit'], {
+function runNpmInstall(offline) {
+  const args = offline
+    ? ['install', '--prefer-offline', '--no-audit']
+    : ['install', '--no-audit'];
+  const result = spawnSync('npm', args, {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8',
   });
-  if (result.status === 0) {
-    log('INFO', 'npm install completed — retrying startup');
-    return true;
+  return result.status === 0
+    ? { ok: true }
+    : { ok: false, error: (result.stderr || result.stdout || 'unknown error').trim() };
+}
+
+function repairDeps(isNativeBinary = false) {
+  // For missing native binaries, skip the offline cache — the tarball in cache may be
+  // the same incomplete one that caused the problem. Go straight to network install.
+  if (isNativeBinary) {
+    log('WARN', 'native binary missing — running full network npm install to self-heal');
+    const result = runNpmInstall(false);
+    if (result.ok) { log('INFO', 'npm install (network) completed — retrying startup'); return true; }
+    log('ERROR', `npm install (network) failed: ${result.error}`);
+    return false;
   }
-  log('ERROR', `npm install failed: ${(result.stderr || result.stdout || 'unknown error').trim()}`);
+
+  // For regular missing modules: try offline cache first (fast), fall back to network.
+  log('WARN', 'missing dependency detected — running npm install to self-heal');
+  const offlineResult = runNpmInstall(true);
+  if (offlineResult.ok) { log('INFO', 'npm install (offline) completed — retrying startup'); return true; }
+
+  log('WARN', `offline install failed (${offlineResult.error.slice(0, 80)}) — trying network install`);
+  const networkResult = runNpmInstall(false);
+  if (networkResult.ok) { log('INFO', 'npm install (network) completed — retrying startup'); return true; }
+
+  log('ERROR', `npm install failed: ${networkResult.error}`);
   return false;
 }
 
@@ -79,7 +102,8 @@ for (let attempt = 1; attempt <= retries; attempt += 1) {
   } catch (error) {
     // Self-heal: if a module is missing (e.g. corrupt node_modules), run npm install once and retry.
     if (error?.code === 'ERR_MODULE_NOT_FOUND' && attempt === 1) {
-      const repaired = repairDeps();
+      const isNative = /\.node['"]?\s*$/.test(error?.message ?? '');
+      const repaired = repairDeps(isNative);
       if (repaired) continue;
       // npm install failed — fall through to normal exit
     }

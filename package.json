@@ -1,6 +1,6 @@
 {
   "name": "what-next",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "What Next — AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
   "type": "module",
   "main": "src/server.js",
@@ -19,7 +19,8 @@
     "chatgpt:login": "node src/scrape-chatgpt.js --login",
     "chatgpt:scrape": "node src/scrape-chatgpt.js --scrape",
     "chatgpt:preview": "node src/scrape-chatgpt.js --scrape --dry-run",
-    "backfill": "node src/backfill-embeddings.js"
+    "backfill": "node src/backfill-embeddings.js",
+    "postinstall": "node --input-type=commonjs -e \"const fs=require('fs'),os=require('os'),p='node_modules/onnxruntime-node/bin/napi-v3/'+os.platform()+'/'+os.arch()+'/onnxruntime_binding.node';if(!fs.existsSync(p)){console.error('FATAL: onnxruntime native binding missing at',p,'\\nRun: npm install --force');process.exit(1);}console.log('OK: onnxruntime binding present (',p,')');\""
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
