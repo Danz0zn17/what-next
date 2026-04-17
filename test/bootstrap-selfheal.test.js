@@ -23,6 +23,10 @@ function isModuleNotFound(error) {
   return error?.code === 'ERR_MODULE_NOT_FOUND';
 }
 
+function isNativeBinary(error) {
+  return /\.node['"]?\s*$/.test(error?.message ?? '');
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test('isRetryable returns false for ERR_MODULE_NOT_FOUND', () => {
@@ -47,6 +51,24 @@ test('isRetryable still works for EAGAIN', () => {
   const err = new Error('resource temporarily unavailable');
   err.code = 'EAGAIN';
   assert.equal(isRetryable(err), true);
+});
+
+test('isNativeBinary detects missing .node binding path', () => {
+  const err = new Error("Cannot find module '../bin/napi-v3/darwin/arm64/onnxruntime_binding.node'");
+  err.code = 'ERR_MODULE_NOT_FOUND';
+  assert.equal(isNativeBinary(err), true);
+});
+
+test('isNativeBinary returns false for regular JS module errors', () => {
+  const err = new Error("Cannot find module '@modelcontextprotocol/sdk/dist/esm/server'");
+  err.code = 'ERR_MODULE_NOT_FOUND';
+  assert.equal(isNativeBinary(err), false);
+});
+
+test('isNativeBinary handles error with no message', () => {
+  assert.equal(isNativeBinary({}), false);
+  assert.equal(isNativeBinary(null), false);
+  assert.equal(isNativeBinary(undefined), false);
 });
 
 test('npm install --version exits 0 (npm is available)', () => {

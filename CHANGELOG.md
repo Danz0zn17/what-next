@@ -14,6 +14,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **`repairDeps` now does a network install for missing native binaries**: previously always used `--prefer-offline`, which could restore the same incomplete tarball from cache and silently fail all 12 retries. Now detects `.node` binary errors specifically and skips the cache entirely, going straight to a network install. Regular missing JS modules still try offline first with network fallback.
 - **`postinstall` now verifies the onnxruntime native binding landed**: any `npm install` that does not produce `onnxruntime_binding.node` for the current platform/arch fails immediately with a clear error message instead of letting users discover it at MCP startup.
+- **`protobufjs` patched to 7.5.5**: resolves critical arbitrary code execution CVE ([GHSA-xq3m-2v4x-88gg](https://github.com/advisories/GHSA-xq3m-2v4x-88gg)).
+
+### Added
+- **`mcp-wrapper.sh` preflight check**: shell-level binding check before exec'ing node — auto-heals via `npm install` on missing binding with a clear human-readable error if that also fails.
+- **Tests for `isNativeBinary` detection**: 3 new unit tests covering `.node` path detection, false-positive guard for regular JS modules, and null/undefined safety.
 
 ---
 
