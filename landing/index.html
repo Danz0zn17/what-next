@@ -374,6 +374,8 @@
     .setup { padding: 100px 0; border-bottom: 1px solid var(--border); }
     .setup h2 { font-size: clamp(2rem, 4vw, 3.2rem); font-weight: 400; letter-spacing: -0.03em; margin-bottom: 14px; }
     .setup-desc { font-size: 17px; color: var(--text-2); max-width: 560px; line-height: 1.75; margin-bottom: 48px; }
+    .setup-desc a { color: var(--accent-light); text-decoration: none; }
+    .setup-desc a:hover { text-decoration: underline; }
     .setup-grid {
       display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
       background: var(--border); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
@@ -732,11 +734,6 @@
         <div class="surface-status">Live</div>
       </div>
       <div class="surface-card live">
-        <div class="surface-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M21 5L2 10l7 4 4 7 8-16z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
-        <div class="surface-name">Telegram</div>
-        <div class="surface-status">Live</div>
-      </div>
-      <div class="surface-card live">
         <div class="surface-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm1 5-1 3h3l-4 7 1-4H9l4-6z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/></svg></div>
         <div class="surface-name">OpenAI Codex</div>
         <div class="surface-status">Live</div>
@@ -744,7 +741,12 @@
       <div class="surface-card live">
         <div class="surface-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 12L20 12M12 4l8 8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
         <div class="surface-name">Cursor / Windsurf</div>
-        <div class="surface-status">Live</div>
+        <div class="surface-status">Via context cards</div>
+      </div>
+      <div class="surface-card live">
+        <div class="surface-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M21 5L2 10l7 4 4 7 8-16z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
+        <div class="surface-name">Telegram</div>
+        <div class="surface-status">Via Hermes</div>
       </div>
       <div class="surface-card">
         <div class="surface-icon"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 4"/></svg></div>
@@ -761,7 +763,7 @@
     <div class="reveal">
       <div class="label">Setup</div>
       <h2>Two minutes to<br>permanent AI memory</h2>
-      <p class="setup-desc">Clone the repo and run the installer. It patches your AI tool's config file automatically - no JSON editing. Your first session after setup starts fully oriented with everything What Next already knows about your projects.</p>
+      <p class="setup-desc"><a href="https://github.com/Danz0zn17/what-next" target="_blank" rel="noopener">Clone the repo</a> and run the installer. It patches your AI tool's config file automatically - no JSON editing. Your first session after setup starts fully oriented with everything What Next already knows about your projects.</p>
     </div>
     <div class="setup-grid reveal">
       <div class="setup-col">
