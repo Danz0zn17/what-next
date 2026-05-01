@@ -494,9 +494,9 @@
         <span class="badge-dot"></span>
         v2.0 - Smart Context Cards - May 2026
       </div>
-      <h1>Stop paying for your AI<br>to <em>relearn your codebase.</em></h1>
+      <h1>Your AI tools don't<br><em>share memory. Now they do.</em></h1>
       <p class="hero-sub">
-        Every Copilot and Claude session burns credits exploring your project from scratch. What Next gives your AI a permanent memory - so it starts every session already knowing your stack, your patterns, and what you were working on.
+        What Next is a persistent memory engine for developers. It learns from every session you run, every commit you push, and every decision you make - then surfaces it instantly to Claude, Copilot, Cursor, or Codex. One memory. Every tool. Always current.
       </p>
       <div class="hero-actions">
         <a href="#beta" class="btn-primary">
@@ -539,11 +539,11 @@
   <div class="container">
     <div class="two-col">
       <div class="reveal">
-        <div class="label">The real cost</div>
-        <h2>Your AI spends your credits<br>before it does any work</h2>
-        <p>Open a new Copilot or Claude session on a project you've worked on for months. The AI has no idea. It starts reading files, asking about your structure, figuring out your patterns. All billable. All redundant.</p>
-        <p>Copilot switched to usage-based billing in 2026. A single agent session against Claude Opus can burn through your monthly budget before you've written a line of code. The exploration phase is the most expensive part - and it's entirely avoidable.</p>
-        <p>What Next maintains a Smart Context Card for every project - your stack, key directories, conventions, recent work, and open tasks. Every session starts with your AI already oriented. No exploration. No re-explaining. Straight into work.</p>
+        <div class="label">The problem</div>
+        <h2>Your AI tools have no<br>memory of each other</h2>
+        <p>Spend the morning in Copilot, switch to Claude in the afternoon - it has no idea what you were doing. Start a new session tomorrow and the first 10 minutes are the same exploration you ran yesterday. Every tool starts cold, every time.</p>
+        <p>Copilot switched to usage-based billing in 2026. That exploration phase you keep repeating is the most expensive part of every session - and it gets billed every single time.</p>
+        <p>What Next runs in the background, learning from every session and every commit. It maintains a structured memory for every project and surfaces it to whichever AI tool you pick up next. The memory is shared. The cold start is gone.</p>
       </div>
       <div class="reveal" style="transition-delay:0.1s">
         <div class="session-widget">
@@ -588,10 +588,18 @@
           <div class="sw-row">
             <div class="sw-icon wn">&#9889;</div>
             <div class="sw-text">
-              <div class="sw-name">Read context card (0.1s)</div>
+              <div class="sw-name">Shared memory loaded (0.1s)</div>
               <div class="sw-sub">Stack, structure, conventions, last session</div>
             </div>
             <div class="sw-cost neutral">instant</div>
+          </div>
+          <div class="sw-row">
+            <div class="sw-icon wn">&#128279;</div>
+            <div class="sw-text">
+              <div class="sw-name">Same memory as yesterday's Copilot session</div>
+              <div class="sw-sub">Claude, Copilot, Codex - all see the same context</div>
+            </div>
+            <div class="sw-cost neutral">shared</div>
           </div>
           <div class="sw-row">
             <div class="sw-icon work">&#9881;</div>
@@ -623,8 +631,8 @@
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/><rect x="11" y="2" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="11" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/><rect x="11" y="11" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/></svg>
         </div>
         <h3>Smart Context Cards</h3>
-        <p>A living document for every project: where things live, your stack, your conventions, key decisions, recent work, and open tasks. Maintained automatically. Readable by any AI tool with or without MCP.</p>
-        <span class="feature-tag">~/.whatnext/agents/{project}.md</span>
+        <p>What Next generates and maintains these for you - you never write them by hand. Every session dump, every git commit, every saved decision feeds into them automatically. They're the readable output of a memory engine, not files you maintain yourself.</p>
+        <span class="feature-tag">auto-generated, never manually written</span>
       </div>
       <div class="feature-card reveal stagger-2">
         <div class="feature-icon">
@@ -809,8 +817,8 @@
   <div class="container">
     <div class="reveal">
       <div class="label">Why What Next</div>
-      <h2>Copilot's built-in memory<br><em>isn't enough.</em></h2>
-      <p class="compare-desc">GitHub just shipped Copilot Memory - but it only works in Copilot, stores data on GitHub's servers, and has no project-level structure. What Next goes deeper, works everywhere, and stays on your machine.</p>
+      <h2>Static instruction files<br><em>are a start. This is further.</em></h2>
+      <p class="compare-desc">A lot of developers already keep a markdown file to give their AI context. It works. What Next is what that idea grows into - memory that learns from every session automatically, works across every tool you use, and never needs you to maintain it manually.</p>
     </div>
     <div class="reveal" style="transition-delay:0.08s;overflow-x:auto">
       <table class="compare-table">
@@ -818,49 +826,49 @@
           <tr>
             <th style="width:36%">Feature</th>
             <th class="ours-header">What Next</th>
-            <th>Copilot Memory</th>
+            <th>Static instruction files</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>Works with Copilot, Claude, Cursor, Codex</td>
-            <td class="yes ours">All of them</td>
-            <td class="no">Copilot only</td>
+            <td>Learns from every session automatically</td>
+            <td class="yes ours">Yes - structured session history</td>
+            <td class="no">No - you write and maintain it</td>
           </tr>
           <tr>
-            <td>Per-project codebase map</td>
-            <td class="yes ours">Stack, dirs, conventions, decisions</td>
-            <td class="no">General notes only</td>
-          </tr>
-          <tr>
-            <td>Git-native context updates</td>
-            <td class="yes ours">Every commit, automatically</td>
+            <td>Auto-updates from git commits</td>
+            <td class="yes ours">Every commit, background watcher</td>
             <td class="no">Manual only</td>
           </tr>
           <tr>
-            <td>Data location</td>
-            <td class="yes ours">Your machine + optional cloud</td>
-            <td class="no">GitHub's servers</td>
+            <td>Works with Claude, Copilot, Cursor, Codex</td>
+            <td class="yes ours">All of them, same memory</td>
+            <td class="no">Whichever tool you point at it</td>
+          </tr>
+          <tr>
+            <td>Search across all projects and history</td>
+            <td class="yes ours">Full-text + semantic search</td>
+            <td class="no">Not possible</td>
+          </tr>
+          <tr>
+            <td>Tracks decisions and why</td>
+            <td class="yes ours">Per-session, structured</td>
+            <td class="no">Whatever you remember to write</td>
+          </tr>
+          <tr>
+            <td>Cross-device sync</td>
+            <td class="yes ours">Optional cloud - memory follows you</td>
+            <td class="no">Local only</td>
           </tr>
           <tr>
             <td>Private from employer</td>
             <td class="yes ours">Local files, never committed</td>
-            <td class="no">Tied to your GitHub account</td>
+            <td class="yes">Local files, never committed</td>
           </tr>
           <tr>
             <td>Works offline</td>
             <td class="yes ours">Always - SQLite local cache</td>
-            <td class="no">Cloud dependent</td>
-          </tr>
-          <tr>
-            <td>Telegram / mobile access</td>
-            <td class="yes ours">Native - memory follows you</td>
-            <td class="no">Not supported</td>
-          </tr>
-          <tr>
-            <td>Cross-project intelligence</td>
-            <td class="yes ours">Search across all projects + history</td>
-            <td class="no">Per-repo only</td>
+            <td class="yes">Always</td>
           </tr>
         </tbody>
       </table>
