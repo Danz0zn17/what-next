@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terms & Conditions - What Next</title>
+  <meta name="description" content="Terms and Conditions for What Next - the persistent memory system for AI coding assistants.">
+  <link rel="canonical" href="https://whatnextai.co.za/terms">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #060606;
+      --bg-1:     #0c0c0c;
+      --border:   rgba(255,255,255,0.07);
+      --text-1:   #f0f0f0;
+      --text-2:   #888;
+      --accent:   #6366f1;
+      --r:        6px;
+    }
+    body { background: var(--bg); color: var(--text-1); font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; -webkit-font-smoothing: antialiased; }
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      border-bottom: 1px solid var(--border);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      backdrop-filter: blur(20px) saturate(160%);
+      background: rgba(6,6,6,0.7);
+    }
+    .nav-inner { max-width: 760px; margin: 0 auto; padding: 0 32px; height: 56px; display: flex; align-items: center; justify-content: space-between; }
+    .logo { font-size: 14px; font-weight: 500; color: var(--text-1); text-decoration: none; }
+    .nav-back { font-size: 13px; color: var(--text-2); text-decoration: none; }
+    .nav-back:hover { color: var(--text-1); }
+    main { max-width: 760px; margin: 0 auto; padding: 100px 32px 80px; }
+    h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 8px; }
+    .meta { font-size: 13px; color: var(--text-2); margin-bottom: 48px; }
+    h2 { font-size: 16px; font-weight: 600; margin: 36px 0 10px; }
+    p { color: var(--text-2); margin-bottom: 14px; }
+    ul { color: var(--text-2); padding-left: 20px; margin-bottom: 14px; }
+    li { margin-bottom: 6px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+    footer { border-top: 1px solid var(--border); padding: 24px 32px; text-align: center; font-size: 13px; color: var(--text-2); }
+    footer a { color: var(--text-2); text-decoration: none; }
+    footer a:hover { color: var(--text-1); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="logo">What Next</a>
+    <a href="/" class="nav-back">Back to home</a>
+  </div>
+</nav>
+
+<main>
+  <h1>Terms &amp; Conditions</h1>
+  <p class="meta">Effective date: 1 May 2026 &nbsp;&middot;&nbsp; What Next is operated by Greenberries (Pty) Ltd, South Africa</p>
+
+  <h2>1. What What Next Is</h2>
+  <p>What Next is a developer tool that gives AI coding assistants (GitHub Copilot, Claude, Cursor, and others) persistent memory of your projects. It works by storing context - your project stack, directory structure, conventions, session notes, and git activity - locally on your machine and optionally syncing it to a cloud database we operate.</p>
+  <p>By installing What Next, using its MCP server, accessing the REST API, or signing up for beta access, you agree to these terms.</p>
+
+  <h2>2. What We Collect and Why</h2>
+  <p>What Next stores the following data:</p>
+  <ul>
+    <li><strong>Session summaries</strong> - text descriptions of what you worked on, decisions made, and next steps. Written by you or your AI assistant.</li>
+    <li><strong>Project intelligence</strong> - stack, directory layout, conventions, and deployment config you choose to save.</li>
+    <li><strong>Git commit metadata</strong> - commit messages, timestamps, and changed file names from your local projects. Not file contents.</li>
+    <li><strong>Facts and preferences</strong> - standalone notes you or your AI saves via the add_fact tool.</li>
+    <li><strong>Beta signup details</strong> - name, email address, and any optional fields you submit via the sign-up form.</li>
+  </ul>
+  <p>We collect this data solely to provide the What Next service: giving your AI tools persistent memory of your work. We do not sell this data, share it with third parties, or use it for advertising.</p>
+
+  <h2>3. Where Your Data Lives</h2>
+  <p>By default, all data is stored locally on your machine in a SQLite database at <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/whatnext.db</code> and as markdown files at <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/agents/</code>.</p>
+  <p>If you provide an API key, your session data syncs to a cloud Postgres database hosted on Railway in the EU/US. You control this by setting or removing the <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">WHATNEXT_API_KEY</code> environment variable. Removing it stops all cloud sync.</p>
+  <p>Your project code, file contents, secrets, and credentials are never stored or transmitted by What Next.</p>
+
+  <h2>4. Privacy and POPIA</h2>
+  <p>We comply with the Protection of Personal Information Act (POPIA) and handle all personal information with care. Specifically:</p>
+  <ul>
+    <li>We only collect data that is necessary to deliver the service.</li>
+    <li>Your email address (if provided for beta access) is used only to contact you about your beta access and product updates.</li>
+    <li>We do not transfer personal data outside South Africa except to services we use to operate What Next (Railway for cloud hosting). These providers are contractually bound to appropriate data protection standards.</li>
+    <li>You have the right to access, correct, or request deletion of any personal data we hold about you. Contact us at <a href="mailto:hello@greenberries.co.za">hello@greenberries.co.za</a> to exercise these rights.</li>
+  </ul>
+
+  <h2>5. Right to Erasure</h2>
+  <p>To delete your data:</p>
+  <ul>
+    <li><strong>Local data</strong> - delete <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/</code> from your machine.</li>
+    <li><strong>Cloud data</strong> - email <a href="mailto:hello@greenberries.co.za">hello@greenberries.co.za</a> with your API key or the email you signed up with. We will delete your cloud records within 7 business days.</li>
+    <li><strong>Beta signup</strong> - email us from the address you signed up with and we will remove it from our list immediately.</li>
+  </ul>
+
+  <h2>6. Beta Status</h2>
+  <p>What Next is currently in private beta. The software is provided as-is. Features may change or break. Data formats may change between versions, which could require a re-setup. We will notify beta users of breaking changes in advance where possible.</p>
+  <p>We make no guarantees about uptime, data retention beyond reasonable best effort, or continuity of the cloud sync service during the beta period.</p>
+
+  <h2>7. Your Responsibilities</h2>
+  <p>You are responsible for:</p>
+  <ul>
+    <li>Keeping your API key secure and not sharing it.</li>
+    <li>Ensuring that any data you choose to save via What Next (session notes, project context) does not include client secrets, passwords, or confidential information you are not authorised to store in a cloud service.</li>
+    <li>Complying with your employer's policies regarding the use of AI coding tools and any personal use of company-licensed software.</li>
+  </ul>
+
+  <h2>8. Intellectual Property</h2>
+  <p>What Next is open-source software. The source code is available on GitHub under its stated licence. The What Next name, logo, and whatnextai.co.za domain are owned by Greenberries (Pty) Ltd.</p>
+  <p>All context, session notes, and project data you store via What Next remains entirely yours. We claim no rights over it.</p>
+
+  <h2>9. Limitation of Liability</h2>
+  <p>What Next is a developer productivity tool. We are not liable for any indirect, incidental, or consequential damages arising from use of the tool, including but not limited to loss of data, loss of productivity, or costs incurred from AI service usage.</p>
+  <p>Our total liability to you for any claim arising from use of What Next shall not exceed the amount you have paid us in the 12 months preceding the claim. During the free beta, this means our liability is zero beyond what South African consumer protection law mandates.</p>
+
+  <h2>10. Changes to These Terms</h2>
+  <p>We may update these terms as the product matures. When we do, we will update the effective date above. Continued use of What Next after a change constitutes acceptance of the updated terms. We will notify beta users of material changes by email.</p>
+
+  <h2>11. Contact</h2>
+  <p>For any questions, data requests, or concerns:</p>
+  <ul>
+    <li>Email: <a href="mailto:hello@greenberries.co.za">hello@greenberries.co.za</a></li>
+    <li>Website: <a href="https://greenberries.co.za" target="_blank" rel="noopener">greenberries.co.za</a></li>
+  </ul>
+
+  <hr class="divider">
+  <p style="font-size:13px">These terms are governed by the laws of the Republic of South Africa. Any disputes will be resolved in the courts of South Africa.</p>
+</main>
+
+<footer>
+  &copy; 2026 What Next &nbsp;&middot;&nbsp; <a href="/">Back to home</a> &nbsp;&middot;&nbsp;
+  Built by <a href="https://greenberries.co.za" target="_blank" rel="noopener">Greenberries</a>
+</footer>
+
+</body>
+</html>
