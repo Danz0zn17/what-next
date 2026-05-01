@@ -124,7 +124,9 @@ if (cloud.isEnabled()) {
     );
     if (!res.ok) return; // no releases yet or rate-limited — silent
     const { tag_name } = await res.json();
-    const local = server.version ?? '1.0.0';
+    const { createRequire } = await import('node:module');
+    const req = createRequire(import.meta.url);
+    const local = req('../package.json').version ?? '1.0.0';
     const notice = buildUpdateNotice(local, tag_name);
     if (notice) process.stderr.write(notice);
   } catch {
