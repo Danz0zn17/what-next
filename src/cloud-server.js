@@ -246,6 +246,25 @@ async function initSchema() {
       END IF;
     END $$;
   `).catch(() => {}); // silently skip if pgvector version doesn't support it yet
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_intelligence (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      repo_path   TEXT,
+      stack       TEXT,
+      key_dirs    TEXT,
+      conventions TEXT,
+      env_vars    TEXT,
+      deployment  TEXT,
+      extra       TEXT,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, project_id)
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_intel_user ON project_intelligence(user_id)');
+
   log('info', 'Schema ready');
 }
 
@@ -837,6 +856,42 @@ async function start() {
           LIMIT $2
         `, [user.id, limit]);
         return send(res, 200, { items: rows });
+      }
+
+      // POST /intelligence — upsert project intelligence card
+      if (method === 'POST' && url.pathname === '/intelligence') {
+        const body = await parseBody(req);
+        if (!body.project) return send(res, 400, { error: 'project is required' });
+        const { rows: [proj] } = await pool.query(
+          `INSERT INTO projects (user_id, name) VALUES ($1, $2)
+           ON CONFLICT (user_id, name) DO UPDATE SET updated_at = NOW()
+           RETURNING id`,
+          [user.id, body.project]
+        );
+        const fields = ['repo_path', 'stack', 'key_dirs', 'conventions', 'env_vars', 'deployment', 'extra'];
+        const sets = fields.map((f, i) => `${f} = $${i + 4}`);
+        const vals = fields.map(f => body[f] ?? null);
+        await pool.query(`
+          INSERT INTO project_intelligence (user_id, project_id, ${fields.join(', ')})
+          VALUES ($1, $2, ${fields.map((_, i) => `$${i + 3}`).join(', ')})
+          ON CONFLICT (user_id, project_id) DO UPDATE SET
+            ${sets.join(', ')}, updated_at = NOW()
+        `, [user.id, proj.id, ...vals]);
+        return send(res, 200, { ok: true });
+      }
+
+      // GET /intelligence/:name — fetch project intelligence card
+      const intelMatch = url.pathname.match(/^\/intelligence\/(.+)$/);
+      if (method === 'GET' && intelMatch) {
+        const name = decodeURIComponent(intelMatch[1]);
+        const { rows } = await pool.query(`
+          SELECT pi.*
+          FROM project_intelligence pi
+          JOIN projects p ON p.id = pi.project_id
+          WHERE pi.user_id = $1 AND p.name = $2
+        `, [user.id, name]);
+        if (!rows.length) return send(res, 404, { error: 'No intelligence for this project' });
+        return send(res, 200, rows[0]);
       }
 
       send(res, 404, { error: 'Not found' });

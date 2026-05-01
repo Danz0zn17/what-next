@@ -136,3 +136,14 @@ export async function editSession(id, updates) {
 export async function whatsNext(limit = 8) {
   return fetchCloud(`/whats-next?limit=${limit}`);
 }
+
+export async function postIntelligence(data) {
+  return fetchCloud('/intelligence', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getIntelligence(projectName) {
+  return fetchCloud(`/intelligence/${encodeURIComponent(projectName)}`);
+}

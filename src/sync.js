@@ -14,13 +14,19 @@
 import * as cloud from './cloud-client.js';
 import { getLastCloudSync, setLastCloudSync, upsertSessionFromCloud, upsertFactFromCloud, storeEmbedding, getAllEmbeddings } from './db.js';
 
-// Embeddings require native onnxruntime binaries — degrade gracefully if unavailable
-let generateEmbedding = null;
-try {
-  const embMod = await import('./embeddings.js');
-  generateEmbedding = embMod.generateEmbedding;
-} catch {
-  process.stderr.write('[sync] embeddings unavailable (native bindings missing) — vector indexing skipped\n');
+// Embeddings require native onnxruntime binaries and can be slow/dataless on
+// macOS boot. Keep sync available and load embeddings only after the API starts.
+let embeddingsPromise = null;
+async function getGenerateEmbedding() {
+  if (!embeddingsPromise) {
+    embeddingsPromise = import('./embeddings.js')
+      .then((mod) => mod.generateEmbedding)
+      .catch((err) => {
+        process.stderr.write(`[sync] embeddings unavailable — vector indexing skipped: ${err.message}\n`);
+        return null;
+      });
+  }
+  return embeddingsPromise;
 }
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -50,6 +56,7 @@ export async function syncFromCloud() {
     const existingEmbeddings = new Set(
       getAllEmbeddings().map(e => `${e.rowtype}:${e.row_id}`)
     );
+    const generateEmbedding = await getGenerateEmbedding();
 
     for (const session of sessions) {
       const localId = upsertSessionFromCloud(session);

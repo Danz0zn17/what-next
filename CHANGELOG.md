@@ -9,6 +9,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.0] - 2026-05-01
+
+### Added
+- **Smart Context Cards (filesystem layer)**: What Next now writes per-project context cards to `~/.whatnext/agents/{project}.md` and a global `~/.whatnext/context.md` after every `dump_session` call. Any AI tool - Copilot, Claude, Codex, Cursor, Hermes - can read these files without MCP, giving instant orientation even when the MCP server is down.
+- **Copilot instructions sync**: `writeCopilotInstructions()` keeps `~/.copilot/copilot-instructions.md` up to date with What Next tool descriptions and Danny's defaults so GitHub Copilot Chat always has standing context.
+- **`update_project_intelligence` MCP tool**: Stores structural codebase knowledge (stack, key dirs, conventions, env vars, deployment config) separately from session history. Persists to local SQLite, syncs to Railway Postgres, and immediately updates the project's context card.
+- **`get_orientation` MCP tool**: Returns a focused project brief under 2000 tokens - intelligence card + last 3 sessions + open tasks + global facts. Replaces expensive cold-start exploration with a single tool call.
+- **`get_context` surface param**: Pass `surface: "hermes"` to get an action-list-only format; other surfaces get the full cross-project snapshot.
+- **Git watcher (`src/watcher.js`)**: Background process that polls `~/Documents/projects/` every 60s for new commits. On each new commit it extracts the message, timestamp, and changed files, posts to `/commit-context`, and triggers a sidecar update. State persisted to `~/.whatnext/watcher-state.json`.
+- **`project_intelligence` DB table**: Local SQLite + Railway Postgres. Stores per-project structural knowledge with `UNIQUE(project_id)` and upsert semantics.
+- **`commit_contexts` DB table**: Stores git commit events from the watcher. `UNIQUE(project_id, commit_hash)` prevents duplicate ingestion.
+- **REST API endpoints**: `POST /intelligence`, `GET /intelligence/:project`, `GET /orientation/:project`, `POST /commit-context`.
+- **Cloud endpoints**: `POST /intelligence`, `GET /intelligence/:name` on the Railway server with `UNIQUE(user_id, project_id)` conflict handling.
+- **Bootstrap**: Generated initial context cards for all 19 existing projects from session history on first run.
+- **Landing page v2**: Completely rewritten with new positioning - "Stop paying for your AI to relearn your codebase." Targets the token/credit burn problem caused by cold-start exploration. New sections: cost burn widget, Smart Context Cards feature grid, git-native memory, universal file layer, and Copilot Memory comparison table.
+
+### Changed
+- **MCP server version**: `1.x` to `2.0.0`.
+- **`dump_session`**: Now triggers sidecar writes (`writeSidecarForProject` + `writeGlobalContext`) via `setImmediate` after every save.
+- **Ecosystem configs updated**: `~/.codex/AGENTS.md`, `~/.codex/config.toml`, `~/.claude/CLAUDE.md`, `~/.hermes/SOUL.md` all updated with v2.0.0 tool names, filesystem-first session start, and `update_project_intelligence` session-end step.
+- **`~/.codex/config.toml`**: Added auto-approval for `get_orientation`, `update_project_intelligence`, `semantic_search`, `whats_next`, `add_fact`, `edit_session`.
+
+---
+
 ## [1.7.1] - 2026-04-17
 
 ### Fixed

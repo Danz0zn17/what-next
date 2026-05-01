@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -38,6 +38,45 @@ function log(level, message) {
   } catch {
     // Never fail startup because logging failed.
   }
+}
+
+function materializeTree(dir, extensions = new Set(['.js', '.json', '.node'])) {
+  try {
+    for (const entryName of readdirSync(dir)) {
+      const fullPath = join(dir, entryName);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        materializeTree(fullPath, extensions);
+      } else if ([...extensions].some((ext) => fullPath.endsWith(ext))) {
+        readFileSync(fullPath);
+      }
+    }
+  } catch (err) {
+    log('WARN', `materialize skipped ${dir}: ${err.message}`);
+  }
+}
+
+function materializeRuntime() {
+  if (process.platform !== 'darwin') return;
+
+  const paths = [
+    ROOT,
+    join(ROOT, 'src'),
+    join(ROOT, 'bin'),
+    join(ROOT, 'node_modules', 'better-sqlite3'),
+    join(ROOT, 'node_modules', 'bindings'),
+    join(ROOT, 'node_modules', 'file-uri-to-path'),
+  ];
+
+  for (const target of paths) {
+    spawnSync('/usr/bin/brctl', ['download', target], { stdio: 'ignore' });
+  }
+
+  materializeTree(join(ROOT, 'src'));
+  materializeTree(join(ROOT, 'bin'));
+  materializeTree(join(ROOT, 'node_modules', 'better-sqlite3'));
+  materializeTree(join(ROOT, 'node_modules', 'bindings'));
+  materializeTree(join(ROOT, 'node_modules', 'file-uri-to-path'));
 }
 
 function isRetryable(error) {
@@ -92,6 +131,8 @@ if (initialDelayMs > 0) {
   log('INFO', `waiting ${initialDelayMs}ms before first attempt (boot delay)`);
   await sleep(initialDelayMs);
 }
+
+materializeRuntime();
 
 for (let attempt = 1; attempt <= retries; attempt += 1) {
   try {

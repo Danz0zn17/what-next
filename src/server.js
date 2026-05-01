@@ -4,7 +4,8 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence } from './db.js';
+import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
@@ -13,7 +14,7 @@ import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '1.7.0',
+  version: '2.0.0',
 });
 
 // ─── Tool timeout + error logging helpers ─────────────────────────────────────
@@ -152,6 +153,11 @@ server.tool(
     syncSessionInBackground(args, id);
     const sourceLabel = cloud.isEnabled() ? 'local, cloud sync queued' : 'local';
 
+    setImmediate(() => {
+      try { writeSidecarForProject(args.project); } catch {}
+      try { writeGlobalContext(); } catch {}
+    });
+
     return {
       content: [{
         type: 'text',
@@ -164,8 +170,11 @@ server.tool(
 // ─── TOOL: get_context ───────────────────────────────────────────────────────
 server.tool(
   'get_context',
-  {},
-  withTimeout('get_context', async () => {
+  {
+    surface: z.enum(['claude-code', 'copilot', 'codex', 'hermes', 'cursor', 'generic']).optional()
+      .describe('Which AI surface is calling — shapes the response format and depth'),
+  },
+  withTimeout('get_context', async ({ surface } = {}) => {
     let context;
     let source = 'cloud';
 
@@ -208,12 +217,113 @@ server.tool(
       lines.push('');
     }
 
-    if (context.facts?.length > 0) {
-      lines.push('**Facts & Preferences:**');
-      for (const f of context.facts) {
-        const scope = f.project_name ? `[${f.project_name}]` : '[global]';
-        lines.push(`${scope} ${f.category}: ${f.content}`);
+    // Hermes (mobile/Telegram): action-list only — no noise
+    if (surface === 'hermes') {
+      const hermes = ['## What Next — Open Actions\n'];
+      for (const s of context.recent_sessions?.slice(0, 5) ?? []) {
+        if (s.next_steps) hermes.push(`**${s.project_name ?? '?'}**: ${s.next_steps}`);
       }
+      return { content: [{ type: 'text', text: hermes.join('\n') }] };
+    }
+
+    if (context.facts?.length > 0) {
+      const globalFacts = context.facts.filter(f => !f.project_name);
+      if (globalFacts.length > 0) {
+        lines.push('**Global Facts & Preferences:**');
+        for (const f of globalFacts.slice(0, 10)) {
+          lines.push(`${f.category}: ${f.content}`);
+        }
+      }
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
+  })
+);
+
+// ─── TOOL: update_project_intelligence ───────────────────────────────────────
+server.tool(
+  'update_project_intelligence',
+  {
+    project: z.string().describe('Project name (matches folder name in ~/Documents/projects/)'),
+    repo_path: z.string().optional().describe('Absolute path to the repo on disk'),
+    stack: z.string().optional().describe('Tech stack summary e.g. "React + Vite + Supabase + Railway"'),
+    key_dirs: z.string().optional().describe('Where things live — key directories and what they contain'),
+    conventions: z.string().optional().describe('Coding patterns, naming conventions, architectural rules'),
+    env_vars: z.string().optional().describe('Environment variable names (keys only, never values)'),
+    deployment: z.string().optional().describe('How the app is deployed e.g. "Netlify (frontend) + Railway (backend)"'),
+    extra: z.string().optional().describe('Key decisions, gotchas, anything a new session should know'),
+  },
+  withTimeout('update_project_intelligence', async (args) => {
+    upsertProjectIntelligence(args);
+    logAudit('update_project_intelligence', `updated for ${args.project}`);
+
+    setImmediate(() => {
+      try { writeSidecarForProject(args.project); } catch {}
+      try { writeGlobalContext(); } catch {}
+    });
+
+    if (cloud.isEnabled()) {
+      setImmediate(async () => {
+        try { await cloud.postIntelligence(args); } catch {}
+      });
+    }
+
+    return {
+      content: [{
+        type: 'text',
+        text: `Project intelligence updated for ${args.project}. Context card written to ~/.whatnext/agents/${args.project}.md`,
+      }],
+    };
+  })
+);
+
+// ─── TOOL: get_orientation ────────────────────────────────────────────────────
+server.tool(
+  'get_orientation',
+  {
+    project: z.string().describe('Project name to get a focused orientation brief for'),
+  },
+  withTimeout('get_orientation', async ({ project }) => {
+    const intel = getProjectIntelligence(project);
+    const sessions = getRecentSessions(20).filter(s => s.project_name === project).slice(0, 3);
+    const whatsNext = getWhatsNext(20).find(i => i.project_name === project);
+    const globalFacts = getAllFacts().filter(f => !f.project_id).slice(0, 8);
+
+    const lines = [`# ${project} — Orientation Brief\n`];
+
+    if (intel) {
+      lines.push('## Project Map');
+      if (intel.stack) lines.push(`Stack: ${intel.stack}`);
+      if (intel.deployment) lines.push(`Deployment: ${intel.deployment}`);
+      if (intel.repo_path) lines.push(`Repo: ${intel.repo_path}`);
+      if (intel.env_vars) lines.push(`Env vars (keys): ${intel.env_vars}`);
+      lines.push('');
+      if (intel.key_dirs) { lines.push('## Where Things Live'); lines.push(intel.key_dirs); lines.push(''); }
+      if (intel.conventions) { lines.push('## Conventions'); lines.push(intel.conventions); lines.push(''); }
+      if (intel.extra) { lines.push('## Key Decisions'); lines.push(intel.extra); lines.push(''); }
+    } else {
+      lines.push('_No project intelligence saved yet. Call `update_project_intelligence` after exploring the codebase._\n');
+    }
+
+    if (sessions.length > 0) {
+      lines.push('## Last 3 Sessions');
+      for (const s of sessions) {
+        lines.push(`**${(s.session_date ?? '').split('T')[0]}**: ${s.summary}`);
+        if (s.what_was_built) lines.push(`Built: ${s.what_was_built}`);
+        if (s.decisions) lines.push(`Decided: ${s.decisions}`);
+        lines.push('');
+      }
+    }
+
+    if (whatsNext?.next_steps) {
+      lines.push('## Open Tasks');
+      lines.push(whatsNext.next_steps);
+      lines.push('');
+    }
+
+    if (globalFacts.length > 0) {
+      lines.push('## Global Preferences');
+      for (const f of globalFacts) lines.push(`${f.category}: ${f.content}`);
     }
 
     return { content: [{ type: 'text', text: lines.join('\n') }] };

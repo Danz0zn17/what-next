@@ -20,18 +20,22 @@
  */
 
 import { createServer } from 'http';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits } from './db.js';
 import * as cloud from './cloud-client.js';
+import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 
-// Embeddings require native onnxruntime binaries — degrade gracefully if unavailable
-let generateEmbedding = null;
-let cosineSimilarity = null;
-try {
-  const embMod = await import('./embeddings.js');
-  generateEmbedding = embMod.generateEmbedding;
-  cosineSimilarity = embMod.cosineSimilarity;
-} catch {
-  process.stderr.write('[api] embeddings unavailable (native bindings missing) — semantic search disabled\n');
+// Embeddings require native onnxruntime binaries and can be slow/dataless on
+// macOS boot. Load them only when semantic search is actually requested so the
+// health endpoint and core memory API are available immediately after login.
+let embeddingsPromise = null;
+async function loadEmbeddings() {
+  if (!embeddingsPromise) {
+    embeddingsPromise = import('./embeddings.js').catch((err) => {
+      process.stderr.write(`[api] embeddings unavailable — semantic search disabled: ${err.message}\n`);
+      return null;
+    });
+  }
+  return embeddingsPromise;
 }
 
 const PORT = process.env.WHATNEXT_PORT ?? 3747;
@@ -594,8 +598,11 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.project || !body.summary) return send(res, 400, { error: 'project and summary are required' });
         const id = addSession(body);
-        // Write-through to cloud (fire and forget — local write already succeeded)
         if (cloud.isEnabled()) cloud.postSession(body).catch(() => {});
+        setImmediate(() => {
+          try { writeSidecarForProject(body.project); } catch {}
+          try { writeGlobalContext(); } catch {}
+        });
         return send(res, 201, { id, message: 'Session stored' });
       }
 
@@ -639,7 +646,9 @@ export function startApiServer() {
 
         // Semantic results (cosine similarity against all embeddings)
         let semRows = [];
-        if (generateEmbedding && cosineSimilarity) {
+        const embMod = await loadEmbeddings();
+        if (embMod?.generateEmbedding && embMod?.cosineSimilarity) {
+          const { generateEmbedding, cosineSimilarity } = embMod;
           const queryEmb = await generateEmbedding(q);
           const allEmbs = getAllEmbeddings().filter(e => e.rowtype === 'session');
           semRows = allEmbs
@@ -680,7 +689,9 @@ export function startApiServer() {
 
       // POST /semantic-search — vector similarity search
       if (method === 'POST' && url.pathname === '/semantic-search') {
-        if (!generateEmbedding) return send(res, 503, { error: 'Semantic search unavailable — native embeddings not installed' });
+        const embMod = await loadEmbeddings();
+        if (!embMod?.generateEmbedding || !embMod?.cosineSimilarity) return send(res, 503, { error: 'Semantic search unavailable — native embeddings not installed' });
+        const { generateEmbedding, cosineSimilarity } = embMod;
         const body = await parseBody(req);
         if (!body.query) return send(res, 400, { error: 'query field required' });
         const limit = body.limit ?? 10;
@@ -752,6 +763,52 @@ export function startApiServer() {
         const project = getProject(name);
         if (!project) return send(res, 404, { error: 'Project not found' });
         return send(res, 200, project);
+      }
+
+      // POST /intelligence — save project intelligence (codebase map, stack, conventions)
+      if (method === 'POST' && url.pathname === '/intelligence') {
+        const body = await parseBody(req);
+        if (!body.project) return send(res, 400, { error: 'project is required' });
+        upsertProjectIntelligence(body);
+        if (cloud.isEnabled()) cloud.postIntelligence(body).catch(() => {});
+        setImmediate(() => {
+          try { writeSidecarForProject(body.project); } catch {}
+          try { writeGlobalContext(); } catch {}
+        });
+        return send(res, 200, { ok: true });
+      }
+
+      // GET /intelligence/:project — get project intelligence card
+      const intelMatch = url.pathname.match(/^\/intelligence\/(.+)$/);
+      if (method === 'GET' && intelMatch) {
+        const name = decodeURIComponent(intelMatch[1]);
+        const intel = getProjectIntelligence(name);
+        if (!intel) return send(res, 404, { error: 'No intelligence saved for this project' });
+        return send(res, 200, intel);
+      }
+
+      // GET /orientation/:project — structured orientation brief (under 2000 tokens)
+      const orientMatch = url.pathname.match(/^\/orientation\/(.+)$/);
+      if (method === 'GET' && orientMatch) {
+        const name = decodeURIComponent(orientMatch[1]);
+        const intel = getProjectIntelligence(name);
+        const sessions = getRecentSessions(20).filter(s => s.project_name === name).slice(0, 3);
+        const whatsNext = getWhatsNext(20).find(i => i.project_name === name);
+        const commits = getRecentCommits(name, 5);
+        return send(res, 200, { project: name, intelligence: intel, recent_sessions: sessions, next_steps: whatsNext?.next_steps ?? null, recent_commits: commits });
+      }
+
+      // POST /commit-context — receive git commit events from watcher
+      if (method === 'POST' && url.pathname === '/commit-context') {
+        const body = await parseBody(req);
+        if (!body.project || !body.commit_hash || !body.message) {
+          return send(res, 400, { error: 'project, commit_hash, and message are required' });
+        }
+        addCommitContext(body);
+        setImmediate(() => {
+          try { writeSidecarForProject(body.project); } catch {}
+        });
+        return send(res, 201, { ok: true });
       }
 
       send(res, 404, { error: 'Not found' });

@@ -85,6 +85,30 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS project_intelligence (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    repo_path   TEXT,
+    stack       TEXT,
+    key_dirs    TEXT,
+    conventions TEXT,
+    env_vars    TEXT,
+    deployment  TEXT,
+    extra       TEXT,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS commit_contexts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    commit_hash  TEXT NOT NULL,
+    message      TEXT NOT NULL,
+    changed_files TEXT,
+    committed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, commit_hash)
+  );
 `);
 
 // Migrations: add cloud_id to sessions + facts for sync dedup (safe to run on existing DBs)
@@ -267,6 +291,73 @@ export function getSessionById(id) {
 export function getFactById(id) {
   const f = db.prepare('SELECT f.*, p.name as project_name FROM facts f LEFT JOIN projects p ON p.id = f.project_id WHERE f.id = ?').get(id);
   return f;
+}
+
+// --- Project intelligence helpers ---
+export function upsertProjectIntelligence({ project, repo_path, stack, key_dirs, conventions, env_vars, deployment, extra }) {
+  const projectId = upsertProject(project);
+  const existing = db.prepare('SELECT id FROM project_intelligence WHERE project_id = ?').get(projectId);
+  if (existing) {
+    const fields = [];
+    const params = [];
+    for (const [k, v] of Object.entries({ repo_path, stack, key_dirs, conventions, env_vars, deployment, extra })) {
+      if (v !== undefined && v !== null) { fields.push(`${k} = ?`); params.push(v); }
+    }
+    if (fields.length) {
+      fields.push("updated_at = datetime('now')");
+      params.push(projectId);
+      db.prepare(`UPDATE project_intelligence SET ${fields.join(', ')} WHERE project_id = ?`).run(...params);
+    }
+    return existing.id;
+  }
+  const result = db.prepare(`
+    INSERT INTO project_intelligence (project_id, repo_path, stack, key_dirs, conventions, env_vars, deployment, extra)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, repo_path ?? null, stack ?? null, key_dirs ?? null, conventions ?? null, env_vars ?? null, deployment ?? null, extra ?? null);
+  return result.lastInsertRowid;
+}
+
+export function getProjectIntelligence(projectName) {
+  return db.prepare(`
+    SELECT pi.*, p.name as project_name
+    FROM project_intelligence pi
+    JOIN projects p ON p.id = pi.project_id
+    WHERE p.name = ?
+  `).get(projectName);
+}
+
+export function getAllProjectIntelligence() {
+  return db.prepare(`
+    SELECT pi.*, p.name as project_name
+    FROM project_intelligence pi
+    JOIN projects p ON p.id = pi.project_id
+    ORDER BY pi.updated_at DESC
+  `).all();
+}
+
+// --- Commit context helpers ---
+export function addCommitContext({ project, commit_hash, message, changed_files, committed_at }) {
+  const projectId = upsertProject(project);
+  try {
+    const result = db.prepare(`
+      INSERT OR IGNORE INTO commit_contexts (project_id, commit_hash, message, changed_files, committed_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(projectId, commit_hash, message, changed_files ?? null, committed_at ?? new Date().toISOString());
+    return result.lastInsertRowid;
+  } catch {
+    return null;
+  }
+}
+
+export function getRecentCommits(projectName, limit = 5) {
+  return db.prepare(`
+    SELECT cc.*
+    FROM commit_contexts cc
+    JOIN projects p ON p.id = cc.project_id
+    WHERE p.name = ?
+    ORDER BY cc.committed_at DESC
+    LIMIT ?
+  `).all(projectName, limit);
 }
 
 // --- Pending gist helpers ---
