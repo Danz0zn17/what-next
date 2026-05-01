@@ -869,7 +869,7 @@ async function start() {
           [user.id, body.project]
         );
         const fields = ['repo_path', 'stack', 'key_dirs', 'conventions', 'env_vars', 'deployment', 'extra'];
-        const sets = fields.map((f, i) => `${f} = $${i + 4}`);
+        const sets = fields.map((f, i) => `${f} = $${i + 3}`);
         const vals = fields.map(f => body[f] ?? null);
         await pool.query(`
           INSERT INTO project_intelligence (user_id, project_id, ${fields.join(', ')})

@@ -7,9 +7,11 @@
 [![Railway](https://img.shields.io/badge/cloud-Railway-0B0D0E.svg)](https://railway.app)
 [![whatnextai.co.za](https://img.shields.io/badge/site-whatnextai.co.za-22c55e.svg)](https://whatnextai.co.za)
 
-**Your AI second brain.** What Next keeps context across every AI tool you use. When you start a new conversation — in Claude, VS Code Copilot, or anywhere else — it already knows what you were building, what decisions you made, and what comes next.
+**Your AI tools don't share memory. What Next gives them one.**
 
-No more copy-pasting context. No more re-explaining your stack. It just knows.
+What Next is a persistent memory engine for developers. It learns from every session you run, every commit you push, and every decision you make - then surfaces it instantly to Claude, Copilot, Cursor, or Codex. One memory. Every tool. Always current.
+
+**v2.0 adds Smart Context Cards** - auto-generated markdown files per project written to `~/.whatnext/agents/` after every session. Any AI tool can read them directly without MCP. They're updated on every git commit by a background watcher, so context stays current even when you don't think about it.
 
 Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
 
@@ -17,12 +19,13 @@ Local is the source of truth. SQLite writes happen first on your machine; cloud 
 
 ## How It Works
 
-What Next runs a local MCP server on your machine (macOS, Windows, or Linux). Every AI tool connects to it. When you finish a session, your AI dumps a summary. When you start a new one, it loads it back. All of it synced to the cloud so your memory is safe even if your machine dies.
+What Next runs a local MCP server and a background API on your machine. Every AI tool connects via MCP. When you finish a session, your AI dumps a summary. A background watcher picks up every git commit. After each write, What Next regenerates a Smart Context Card for that project - a plain markdown file any AI tool can read, with or without MCP.
 
 ```
-Your AI tools  ──MCP──►  What Next (local-first)  ──background sync──►  Cloud (Railway)
-(Claude, VS Code,         runs on your Mac                 backup only
- Copilot, Hermes)         SQLite source of truth
+git commit  ──watcher──►  What Next (local-first)  ──background sync──►  Cloud (Railway)
+dump_session              SQLite source of truth          backup only
+                          ↓ writes
+                    ~/.whatnext/agents/{project}.md   ← Claude, Copilot, Cursor, Codex read this
 ```
 
 ---
@@ -132,7 +135,7 @@ Replace `/path/to/what-next/bin/bootstrap-entry.js` with the absolute path where
 
 **5. Restart Claude Desktop / VS Code**
 
-What Next will appear as an available MCP tool. You'll see tools like `dump_session`, `get_project`, `search_memories` in your AI's tool list.
+What Next will appear as an available MCP tool. You'll see tools like `dump_session`, `get_orientation`, `get_context`, and `search_memories` in your AI's tool list.
 
 ---
 
@@ -169,8 +172,10 @@ Once connected, your AI can use these tools automatically:
 
 | Tool | What it does |
 |---|---|
-| `get_context` | **Start here.** One call returns all projects, recent sessions, and facts — a full brain dump at session start |
-| `dump_session` | Save a summary of the current session — what was built, decisions made, next steps |
+| `get_orientation` | **Start here for project work.** Returns stack, key dirs, conventions, last 3 sessions, and open tasks in under 2000 tokens. Replaces cold-start exploration entirely. |
+| `get_context` | Full cross-project brain dump — all projects, recent sessions, facts. Use at the start of a session when you need the full picture. |
+| `dump_session` | Save a summary of the current session — what was built, decisions made, next steps. Triggers a Smart Context Card update automatically. |
+| `update_project_intelligence` | Save structural knowledge about a project (stack, key dirs, conventions, env vars, deployment). Future sessions skip exploration entirely. |
 | `edit_session` | Update fields on an existing session by local ID |
 | `get_project` | Load full history for a project — all prior sessions in one call |
 | `list_projects` | See all known projects with session counts and last activity |
@@ -183,15 +188,19 @@ Once connected, your AI can use these tools automatically:
 
 ## What to Try First
 
-Ask your AI (Claude or Copilot) at the start of any work session:
+Ask your AI (Claude, Copilot, Cursor, or Codex) at the start of a session:
 
-> *"Check What Next — what do you know about this project?"*
+> *"Run get_orientation for this project."*
 
-After a session, tell it:
+After a session:
 
 > *"Dump this session to What Next."*
 
-It handles the rest.
+After exploring a new project:
+
+> *"Save what you learned about the codebase structure with update_project_intelligence."*
+
+It handles the rest — writes the context card, updates the file, syncs to cloud.
 
 ---
 
