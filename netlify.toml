@@ -1,5 +1,6 @@
 [build]
   publish = "landing"
+  functions = "netlify/functions"
 
 [[redirects]]
   from   = "/sitemap.xml"
