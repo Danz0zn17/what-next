@@ -10,7 +10,7 @@
  *   ~/.copilot/copilot-instructions.md — Copilot session-start instructions
  */
 
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectIntelligence, getRecentSessions, getWhatsNext, getAllFacts, listProjects, getRecentCommits } from './db.js';
@@ -113,8 +113,45 @@ export function writeSidecarForProject(projectName) {
 
     const filePath = join(AGENTS_DIR, `${projectName}.md`);
     writeFileSync(filePath, lines.join('\n'), 'utf8');
+
+    // Auto-write .cursorrules if the repo is known and Cursor is detected
+    if (intel?.repo_path) {
+      writeCursorRules(projectName, intel.repo_path, filePath);
+    }
   } catch (err) {
     process.stderr.write(`[sidecar] Failed to write sidecar for ${projectName}: ${err.message}\n`);
+  }
+}
+
+function writeCursorRules(projectName, repoPath, cardPath) {
+  try {
+    const cursorDir = join(repoPath, '.cursor');
+    const cursorRulesPath = join(repoPath, '.cursorrules');
+    const hasCursorDir = existsSync(cursorDir);
+    const hasCursorRules = existsSync(cursorRulesPath);
+
+    if (!hasCursorDir && !hasCursorRules) return;
+
+    const marker = '# [What Next] Auto-managed block - do not edit below this line';
+    const block = [
+      marker,
+      `# Context card for ${projectName} is at: ${cardPath}`,
+      `# It is updated automatically on every session dump and git commit.`,
+      `# Read it at the start of every session for instant orientation.`,
+      '',
+      readFileSync(cardPath, 'utf8').slice(0, 2000),
+    ].join('\n');
+
+    if (hasCursorRules) {
+      const existing = readFileSync(cursorRulesPath, 'utf8');
+      const markerIdx = existing.indexOf(marker);
+      const base = markerIdx >= 0 ? existing.slice(0, markerIdx).trimEnd() : existing.trimEnd();
+      writeFileSync(cursorRulesPath, base ? `${base}\n\n${block}` : block, 'utf8');
+    } else {
+      writeFileSync(join(cursorDir, 'rules'), block, 'utf8');
+    }
+  } catch {
+    // cursor rules write is best-effort, never throw
   }
 }
 

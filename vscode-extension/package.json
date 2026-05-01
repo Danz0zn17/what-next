@@ -1,0 +1,90 @@
+{
+  "name": "what-next",
+  "displayName": "What Next",
+  "description": "Persistent AI memory for your codebase. Every session starts oriented - no re-explaining, no cold start.",
+  "version": "0.1.0",
+  "publisher": "greenberries",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Other"],
+  "keywords": ["ai", "memory", "copilot", "claude", "context", "productivity"],
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Danz0zn17/what-next"
+  },
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "whatnext.saveSession",
+        "title": "What Next: Save Session"
+      },
+      {
+        "command": "whatnext.getOrientation",
+        "title": "What Next: Get Orientation"
+      },
+      {
+        "command": "whatnext.openContextCard",
+        "title": "What Next: Open Context Card"
+      },
+      {
+        "command": "whatnext.whatsNext",
+        "title": "What Next: What's Next?"
+      },
+      {
+        "command": "whatnext.showStatus",
+        "title": "What Next: Show Status"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "whatnext-sidebar",
+          "title": "What Next",
+          "icon": "media/icon-mono.svg"
+        }
+      ]
+    },
+    "views": {
+      "whatnext-sidebar": [
+        {
+          "id": "whatnext.projectView",
+          "name": "Context",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "What Next",
+      "properties": {
+        "whatnext.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:3747",
+          "description": "URL of the What Next local API server"
+        },
+        "whatnext.autoPromptOnClose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Prompt to save a session when closing a workspace (requires manual confirmation)"
+        },
+        "whatnext.statusBarEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show What Next status in the status bar"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

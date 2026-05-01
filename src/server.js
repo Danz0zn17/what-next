@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince } from './db.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import * as cloud from './cloud-client.js';
@@ -655,6 +655,49 @@ server.tool(
     } catch {
       return { content: [{ type: 'text', text: 'Could not reach cloud — feedback not sent.' }] };
     }
+  })
+);
+
+// ─── TOOL: since_last_session ────────────────────────────────────────────────
+server.tool(
+  'since_last_session',
+  {
+    project: z.string().describe('Project name to check'),
+  },
+  withTimeout('since_last_session', async (args) => {
+    const last = getLastSession(args.project);
+    if (!last) {
+      return { content: [{ type: 'text', text: `No previous sessions found for "${args.project}".` }] };
+    }
+
+    const since = last.session_date;
+    const commits = getCommitsSince(args.project, since);
+    const daysSince = Math.round((Date.now() - new Date(since).getTime()) / 86_400_000);
+    const daysLabel = daysSince === 0 ? 'today' : daysSince === 1 ? 'yesterday' : `${daysSince} days ago`;
+
+    const lines = [
+      `## Since your last session (${daysLabel} — ${String(since).split('T')[0]})`,
+      '',
+      `**Last session summary:** ${last.summary ?? 'n/a'}`,
+    ];
+    if (last.next_steps) lines.push(`**Open task:** ${last.next_steps}`);
+    lines.push('');
+
+    if (commits.length === 0) {
+      lines.push('No git commits captured since then.');
+    } else {
+      lines.push(`**${commits.length} commit${commits.length === 1 ? '' : 's'} since then:**`);
+      for (const c of commits) {
+        const date = String(c.committed_at).split('T')[0];
+        lines.push(`- ${date}: ${c.message}`);
+        if (c.changed_files) {
+          const files = c.changed_files.split('\n').slice(0, 4);
+          for (const f of files) lines.push(`  · ${f}`);
+        }
+      }
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   })
 );
 

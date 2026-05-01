@@ -1,0 +1,12 @@
+landing/
+vscode-extension/
+test/
+data/
+.env*
+*.log
+.git/
+*.sh
+bin/install.js
+bin/healthcheck.js
+bin/bootstrap-entry.js
+bin/start-api.sh

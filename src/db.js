@@ -360,6 +360,28 @@ export function getRecentCommits(projectName, limit = 5) {
   `).all(projectName, limit);
 }
 
+// --- Since last session: commits + last session date for a project ---
+export function getLastSession(projectName) {
+  return db.prepare(`
+    SELECT s.id, s.summary, s.session_date, s.next_steps, s.what_was_built
+    FROM sessions s
+    JOIN projects p ON p.id = s.project_id
+    WHERE p.name = ?
+    ORDER BY s.session_date DESC
+    LIMIT 1
+  `).get(projectName);
+}
+
+export function getCommitsSince(projectName, since) {
+  return db.prepare(`
+    SELECT cc.message, cc.committed_at, cc.changed_files
+    FROM commit_contexts cc
+    JOIN projects p ON p.id = cc.project_id
+    WHERE p.name = ? AND cc.committed_at > ?
+    ORDER BY cc.committed_at ASC
+  `).all(projectName, since);
+}
+
 // --- Pending gist helpers ---
 export function storePendingGist(gistId, payload) {
   db.prepare('INSERT INTO pending_gists (gist_id, payload) VALUES (?, ?)').run(gistId, payload);
