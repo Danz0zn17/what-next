@@ -398,6 +398,6 @@ server.on('error', (error) => {
   process.exit(1);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  log('INFO', `local API listening on http://127.0.0.1:${PORT} using ${DB_PATH}`);
+server.listen(PORT, '0.0.0.0', () => {
+  log('INFO', `local API listening on http://localhost:${PORT} using ${DB_PATH}`);
 });
