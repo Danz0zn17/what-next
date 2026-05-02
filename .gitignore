@@ -11,3 +11,4 @@ agent-blue-setup/
 
 # Local Netlify folder
 .netlify
+vscode-extension/*.vsix
