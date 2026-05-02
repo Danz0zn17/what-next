@@ -771,23 +771,23 @@
     <div class="reveal">
       <div class="label">Setup</div>
       <h2>Two minutes to<br>permanent AI memory</h2>
-      <p class="setup-desc"><a href="https://github.com/Danz0zn17/what-next" target="_blank" rel="noopener">Clone the repo</a> and run the installer. It patches your AI tool's config file automatically - no JSON editing. Your first session after setup starts fully oriented with everything What Next already knows about your projects.</p>
+      <p class="setup-desc">One command to install, one to configure. The installer patches your AI tool's config file automatically - no JSON editing. Your first session after setup starts fully oriented with everything What Next already knows about your projects.</p>
     </div>
     <div class="setup-grid reveal">
       <div class="setup-col">
-        <div class="setup-col-label">MCP config (Claude, VS Code, Codex)</div>
+        <div class="setup-col-label">Install + configure (2 commands)</div>
         <div class="code">
-          <div><span style="color:#2a2a2a">{</span></div>
-          <div>&nbsp;&nbsp;<span class="t-str">"mcpServers"</span>: {</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="t-str">"what-next"</span>: {</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="t-key">"command"</span>: <span class="t-str">"node"</span>,</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="t-key">"args"</span>: [<span class="t-str">"src/server.js"</span>],</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="t-key">"env"</span>: {</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="t-key">"WHATNEXT_API_KEY"</span>: <span class="t-str">"..."</span></div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;}</div>
-          <div>&nbsp;&nbsp;}</div>
-          <div><span style="color:#2a2a2a">}</span></div>
+          <div><span class="t-dim"># 1. install</span></div>
+          <div><span class="t-key">npm</span> install -g <span class="t-str">whatnext-ai</span></div>
+          <div>&nbsp;</div>
+          <div><span class="t-dim"># 2. wire up your AI tool</span></div>
+          <div><span class="t-key">install-what-next</span> --client <span class="t-str">claude</span> \</div>
+          <div>&nbsp;&nbsp;--key <span class="t-str">bak_your_api_key</span></div>
+          <div>&nbsp;</div>
+          <div><span class="t-dim"># also works with:</span></div>
+          <div><span class="t-dim"># --client vscode</span></div>
+          <div><span class="t-dim"># --client codex</span></div>
+          <div><span class="t-dim"># --client cursor</span></div>
         </div>
       </div>
       <div class="setup-col" style="border-left:1px solid var(--border)">

@@ -40,33 +40,29 @@ dump_session              SQLite source of truth          backup only
 
 ## Setup (2 minutes)
 
-**1. Clone the repo**
-
-macOS / Linux:
+**1. Install**
 
 ```bash
-git clone https://github.com/Danz0zn17/what-next.git ~/what-next
-cd ~/what-next && npm install
+npm install -g whatnext-ai
 ```
 
-Windows PowerShell:
-
-```powershell
-git clone https://github.com/Danz0zn17/what-next.git "$env:USERPROFILE\what-next"
-cd "$env:USERPROFILE\what-next"
-npm install
-```
-
-**2. Recommended: run the installer (all platforms)**
+**2. Run the installer**
 
 ```bash
 # Claude Desktop
-node bin/install.js --client claude  --key bak_xxx
+install-what-next --client claude  --key bak_xxx
 # VS Code / GitHub Copilot
-node bin/install.js --client vscode  --key bak_xxx
+install-what-next --client vscode  --key bak_xxx
 # VS Code Codex extension or Codex CLI
-node bin/install.js --client codex   --key bak_xxx
+install-what-next --client codex   --key bak_xxx
 ```
+
+> **Prefer cloning the repo?** (for contributors or self-hosters)
+> ```bash
+> git clone https://github.com/Danz0zn17/what-next.git ~/what-next
+> cd ~/what-next && npm install
+> node bin/install.js --client claude --key bak_xxx
+> ```
 
 The installer writes the correct config file for your tool and OS automatically.
 
