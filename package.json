@@ -2,6 +2,7 @@
   "name": "whatnext-ai",
   "version": "2.0.0",
   "description": "What Next — AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
+  "license": "MIT",
   "type": "module",
   "main": "src/server.js",
   "bin": {
