@@ -58,9 +58,8 @@ export function getWebviewContent(
     </div>`).join('');
 
   const commitRows = commits.slice(0, 5).map(c => {
-    const msg = esc((c.message ?? '').slice(0, 68));
-    const hash = c.hash ? `<span class="commit-hash">${esc(c.hash.slice(0, 7))}</span>` : '';
-    return `<div class="commit-row">${hash}<span class="commit-msg">${msg}</span></div>`;
+    const msg = esc((c.message ?? '').slice(0, 75));
+    return `<div class="commit-row"><span class="commit-msg">${msg}</span></div>`;
   }).join('');
 
   const taskLines = tasks
