@@ -1,0 +1,92 @@
+name: Testbot CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testbot:
+    name: Full test gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Layer 1: secrets scan on all files (not just staged)
+      - name: Secret scan
+        run: |
+          if git grep -E 'AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{20,}|xoxb-[0-9]+-[0-9A-Za-z]+|ghp_[a-zA-Z0-9]{36}' -- '*.js' '*.ts' '*.tsx' '*.json' 2>/dev/null; then
+            echo "ERROR: possible secrets found in repo"
+            exit 1
+          fi
+          echo "No secrets detected"
+
+      # Layer 2: security audit
+      - name: Audit (no high/critical CVEs)
+        run: npm audit --audit-level=high
+
+      # Layer 3: type check / syntax
+      - name: Type check
+        run: |
+          if [ -f tsconfig.json ]; then
+            npx tsc --noEmit
+          else
+            find src bin -name "*.js" -o -name "*.mjs" 2>/dev/null | grep -v node_modules | grep -v '/out/' | grep -v '/dist/' | head -50 | xargs node --check
+          fi
+
+      # Layer 4: lint (skip if no config)
+      - name: Lint
+        run: |
+          if ls .eslintrc* eslint.config.* 2>/dev/null | grep -q .; then
+            npx eslint . --max-warnings=0
+          else
+            echo "No ESLint config - skipping"
+          fi
+
+      # Layer 5: unit tests
+      - name: Unit tests
+        run: npm run test:ci 2>/dev/null || npm test
+        env:
+          CI: true
+          NODE_ENV: test
+
+      # Layer 6: build verification
+      - name: Build
+        run: |
+          if grep -q '"build"' package.json; then
+            npm run build
+          else
+            echo "No build script - skipping"
+          fi
+        env:
+          CI: true
+          NODE_ENV: production
+
+      # Upload build artifacts if they exist
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            dist/
+            .next/
+            out/
+          if-no-files-found: ignore
+          retention-days: 7
