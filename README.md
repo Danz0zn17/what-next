@@ -1,6 +1,6 @@
 # What Next
 
-> Persistent memory for AI, delivered over MCP.
+> Persistent memory for AI coding tools, delivered over MCP.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-6366f1.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/protocol-MCP-818cf8.svg)](https://modelcontextprotocol.io)
@@ -9,9 +9,9 @@
 
 **Your AI tools don't share memory. What Next gives them one.**
 
-What Next is a persistent memory engine for developers. It learns from every session you run, every commit you push, and every decision you make - then surfaces it instantly to Claude, Copilot, Cursor, or Codex. One memory. Every tool. Always current.
+What Next is a persistent memory engine for developers. It learns from every session you run, every commit you push, and every decision you make - then surfaces it instantly to Claude Code, Claude Desktop, Copilot, Cursor, or Codex. One memory. Every tool. Always current.
 
-**v2.0 adds Smart Context Cards** - auto-generated markdown files per project written to `~/.whatnext/agents/` after every session. Any AI tool can read them directly without MCP. They're updated on every git commit by a background watcher, so context stays current even when you don't think about it.
+**v2.0 - Smart Context Cards:** After every session dump or git commit, What Next auto-generates a plain markdown file per project at `~/.whatnext/agents/{project}.md`. Any AI tool can read this file directly - no MCP required. It's always current because it updates on every commit.
 
 Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
 
@@ -19,22 +19,34 @@ Local is the source of truth. SQLite writes happen first on your machine; cloud 
 
 ## How It Works
 
-What Next runs a local MCP server and a background API on your machine. Every AI tool connects via MCP. When you finish a session, your AI dumps a summary. A background watcher picks up every git commit. After each write, What Next regenerates a Smart Context Card for that project - a plain markdown file any AI tool can read, with or without MCP.
-
 ```
 git commit  ──watcher──►  What Next (local-first)  ──background sync──►  Cloud (Railway)
 dump_session              SQLite source of truth          backup only
                           ↓ writes
-                    ~/.whatnext/agents/{project}.md   ← Claude, Copilot, Cursor, Codex read this
+                    ~/.whatnext/agents/{project}.md   ← any AI tool reads this directly
 ```
+
+---
+
+## Supported Surfaces
+
+| Surface | Config |
+|---|---|
+| Claude Code | `CLAUDE.md` in project root or `~/.claude/CLAUDE.md` global |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| VS Code / GitHub Copilot | `~/Library/Application Support/Code/User/mcp.json` |
+| VS Code Codex | `~/.codex/config.toml` |
+| GitHub Copilot CLI | `~/.config/github-copilot/mcp.json` |
+| Cursor | `.cursor/rules/` in project root |
+| Telegram / Hermes | `~/.hermes/config.yaml` |
 
 ---
 
 ## Prerequisites
 
 - **macOS, Windows, or Linux**
-- **Node.js 20+** — install via [nodejs.org](https://nodejs.org)
-- **Claude Desktop** and/or **VS Code with GitHub Copilot** — at least one AI surface
+- **Node.js 20+** - install via [nodejs.org](https://nodejs.org)
+- At least one AI surface: Claude Code, Claude Desktop, VS Code with Copilot, Cursor, etc.
 
 ---
 
@@ -64,11 +76,9 @@ install-what-next --client codex   --key bak_xxx
 > node bin/install.js --client claude --key bak_xxx
 > ```
 
-The installer writes the correct config file for your tool and OS automatically.
+On **macOS**, the installer sets up `com.whatnextai.api` as a LaunchAgent - the REST API starts at every login and auto-restarts on crash.
 
-On **macOS**, the installer also sets up `com.whatnextai.api` as a LaunchAgent - the REST API will start at every login and auto-restart on crash. No extra steps needed.
-
-**3. Add to Claude Desktop (manual option)**
+**3. Add to Claude Desktop**
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -89,7 +99,34 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-**4. Add to VS Code / GitHub Copilot (manual option)**
+**4. Add to Claude Code**
+
+What Next works with Claude Code in two ways:
+
+**Option A - Global CLAUDE.md** (one-time setup, works across all projects):
+
+Add to `~/.claude/CLAUDE.md`:
+```markdown
+## What Next (Persistent Second Brain)
+
+At session start: Read `~/.whatnext/agents/{project-name}.md` - instant context, no MCP needed.
+
+MCP tools: get_context, get_orientation, update_project_intelligence, dump_session, search_memories, whats_next
+
+CRITICAL - how to call dump_session in Claude Code: always call `mcp__what-next__dump_session`
+directly as a tool call. Never delegate via the Agent tool - subagents don't inherit MCP connections.
+
+Trigger dump_session whenever the session ends (any phrase of thanks, farewell, or completion).
+Trigger silently after every completed milestone - tag as checkpoint.
+```
+
+**Option B - Per-project CLAUDE.md** (add to any project root):
+```bash
+echo "" >> CLAUDE.md
+curl https://raw.githubusercontent.com/Danz0zn17/what-next/main/CLAUDE-snippet.md >> CLAUDE.md
+```
+
+**5. Add to VS Code / GitHub Copilot**
 
 Edit `~/Library/Application Support/Code/User/mcp.json`:
 
@@ -110,14 +147,14 @@ Edit `~/Library/Application Support/Code/User/mcp.json`:
 }
 ```
 
-**4b. Add to VS Code Codex extension or Codex CLI (manual option)**
+**6. Add to VS Code Codex**
 
-Both the VS Code Codex extension (`openai.chatgpt`) and the Codex CLI agent read the same file: `~/.codex/config.toml`. Append this block:
+Append to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.what-next]
 command = "node"
-args = ["/path/to/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"]
+args = ["/absolute/path/to/what-next/bin/bootstrap-entry.js", "src/server.js", "mcp"]
 tool_timeout_sec = 20
 
 [mcp_servers.what-next.env]
@@ -127,64 +164,33 @@ WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"
 WHATNEXT_API_KEY = "your_api_key_here"
 ```
 
-Replace `/path/to/what-next/bin/bootstrap-entry.js` with the absolute path where you cloned the repo.
+**7. Restart your AI tool**
 
-**5. Restart Claude Desktop / VS Code**
-
-What Next will appear as an available MCP tool. You'll see tools like `dump_session`, `get_orientation`, `get_context`, and `search_memories` in your AI's tool list.
-
----
-
-## Optional: `wn` CLI
-
-A terminal-native interface to What Next. No new dependencies — talks to the local REST API at `localhost:3747`.
-
-```bash
-npm link   # one-time — makes wn available in any terminal
-```
-
-Then from anywhere:
-
-```bash
-wn context                  # full brain dump — projects, sessions, facts
-wn next                     # open next steps across all projects
-wn projects                 # list all projects
-wn project <name>           # full session history for a project
-wn search "supabase auth"   # hybrid search across all memories
-wn dump                     # save a session interactively (auto-detects current git repo)
-wn fact "always use conventional commits"
-wn status                   # local API health + cloud sync status
-wn open                     # open the web UI in your browser
-wn install --client codex --key bak_xxx   # run the MCP installer
-```
-
-Short aliases: `ctx`, `n`, `ps`, `p`, `s`, `d`, `f`, `i`. Colour output is TTY-aware (auto-disabled when piping).
+What Next will appear as available MCP tools: `dump_session`, `get_orientation`, `get_context`, `search_memories`, and more.
 
 ---
 
 ## Available Tools
 
-Once connected, your AI can use these tools automatically:
-
 | Tool | What it does |
 |---|---|
 | `get_orientation` | **Start here for project work.** Returns stack, key dirs, conventions, last 3 sessions, and open tasks in under 2000 tokens. Replaces cold-start exploration entirely. |
-| `get_context` | Full cross-project brain dump — all projects, recent sessions, facts. Use at the start of a session when you need the full picture. |
-| `dump_session` | Save a summary of the current session — what was built, decisions made, next steps. Triggers a Smart Context Card update automatically. |
+| `get_context` | Full cross-project brain dump - all projects, recent sessions, facts. Use at session start when you need the full picture. |
+| `dump_session` | Save a summary of the current session - what was built, decisions made, next steps. Triggers a Smart Context Card update automatically. |
 | `update_project_intelligence` | Save structural knowledge about a project (stack, key dirs, conventions, env vars, deployment). Future sessions skip exploration entirely. |
-| `edit_session` | Update fields on an existing session by local ID |
-| `get_project` | Load full history for a project — all prior sessions in one call |
-| `list_projects` | See all known projects with session counts and last activity |
-| `search_memories` | Full-text keyword search across all sessions and facts |
-| `add_fact` | Store a persistent fact (preference, config, decision) that isn't tied to a session |
-| `semantic_search` | Embedding-based search — finds related context even without exact keyword matches |
-| `whats_next` | See the most recent open `next_steps` across all your projects — your instant to-do list |
+| `whats_next` | See the most recent open `next_steps` across all your projects - your instant to-do list. |
+| `search_memories` | Full-text keyword search across all sessions and facts. |
+| `semantic_search` | Embedding-based search - finds related context even without exact keyword matches. |
+| `get_project` | Load full history for a project - all prior sessions in one call. |
+| `list_projects` | See all known projects with session counts and last activity. |
+| `add_fact` | Store a persistent fact (preference, config, decision) not tied to a session. |
+| `edit_session` | Update fields on an existing session by local ID. |
 
 ---
 
 ## What to Try First
 
-Ask your AI (Claude, Copilot, Cursor, or Codex) at the start of a session:
+Ask your AI (Claude Code, Claude Desktop, Copilot, Cursor, or Codex) at the start of a session:
 
 > *"Run get_orientation for this project."*
 
@@ -192,111 +198,36 @@ After a session:
 
 > *"Dump this session to What Next."*
 
-After exploring a new project:
+After exploring a new codebase:
 
-> *"Save what you learned about the codebase structure with update_project_intelligence."*
+> *"Save what you learned about the structure with update_project_intelligence."*
 
-It handles the rest — writes the context card, updates the file, syncs to cloud.
+It handles the rest - writes the context card, updates the file, syncs to cloud.
 
 ---
 
-## Troubleshooting
+## Optional: `wn` CLI
 
-**Tools don't appear in Claude/VS Code**
-- Restart the app completely after running the installer — MCP config is only read at startup
-- Check the path: `~/what-next/bin/bootstrap-entry.js` — if you cloned somewhere else, update the path
-- Make sure `WHATNEXT_API_KEY` is set to your key (from the welcome email)
-- On Windows, use an absolute path like `C:\Users\<you>\what-next\bin\bootstrap-entry.js`
-
-**Linux: MCP tools not appearing after install**
-- Claude Desktop on Linux is not officially supported — config paths vary by build
-- The installer writes to `~/.config/Claude/claude_desktop_config.json` by default
-- If your Claude Desktop uses a different location, override it:
-  ```bash
-  XDG_CONFIG_HOME=/path/to/your/config node bin/install.js --client claude --key bak_xxx
-  ```
-- Verify the file was written: `cat ~/.config/Claude/claude_desktop_config.json`
-- Then fully restart Claude Desktop (quit + reopen)
-- For VS Code on Linux, the path `~/.config/Code/User/mcp.json` is standard and should work
-
-**"Invalid or missing API key" errors**
-- Your API key is wrong or missing from the config env block
-- Double-check you replaced `your_api_key_here` with the actual key
-
-**Session not syncing to cloud**
-- Local SQLite is still the primary store — your dump already succeeded
-- Cloud sync is backup-only and retries in the background
-- Check `~/Library/Logs/what-next/mcp-audit.log` or `bootstrap.log` for failures
-
-**`search_memories` crashes or returns nothing for certain queries**
-- Postgres full-text search rejects special characters like `:`, `(`, `)`, `!`, `@`
-- This is handled automatically server-side since v0.1.1 — update to the latest version
-- Workaround on older versions: use plain words without punctuation in search queries
-
-**Hermes reads files and gets "Resource deadlock avoided" (macOS only)**
-- macOS can deadlock PTY-based subprocess reads on certain `.md` files
-- Fixed in `file_operations.py` since v0.1.1 — native Python reads are used first, shell only as fallback
-- If still occurring, restart the Hermes gateway: `launchctl stop ai.hermes.gateway && launchctl start ai.hermes.gateway`
-
-**Local service health check**
-```bash
-curl http://localhost:3747/health
-# → {"ok":true,"service":"what-next-local"}
-curl http://localhost:3747/context
-# → recent sessions + facts (same as MCP get_context)
-curl "http://localhost:3747/whats-next"
-# → open next_steps per project
-curl "http://localhost:3747/hybrid-search?q=auth+bug"
-# → FTS + semantic RRF merged results
-curl "http://localhost:3747/sync/status"
-# → last_cloud_sync timestamp and pending gists count
-```
-If the local service is down:
-- macOS: `launchctl start com.whatnextai.api` (LaunchAgent auto-restarts on crash and every reboot)
-- Windows PowerShell: `node "$env:USERPROFILE\what-next\bin\local-api.js"`
-- Linux: `node ~/what-next/bin/local-api.js`
-
-For always-on local API on Windows, create a Task Scheduler task that runs:
-- Program/script: `node`
-- Add arguments: `C:\Users\<you>\what-next\bin\local-api.js`
-- Trigger: At log on
-
-**macOS self-healing on boot**: The LaunchAgent runs `start-api.sh` on every login. If source code is missing it restores from GitHub; if node_modules are gone it runs `npm install`; if the DB is absent it re-initialises the schema. Your What Next is resilient to accidental deletions.
-
-**MCP tool hangs or `dump_session` is slow**
-
-What Next is intended to be local-first. `dump_session` writes to local SQLite immediately and only then queues cloud backup in the background.
-
-If `dump_session` hangs in VS Code Copilot or Claude Desktop:
-1. Check the bootstrap and audit logs first:
-   `tail -n 40 ~/Library/Logs/what-next/bootstrap.log`
-   `tail -n 40 ~/Library/Logs/what-next/mcp-audit.log`
-2. If it keeps happening: **start a new chat** — VS Code/Claude spawns a fresh MCP stdio process per conversation
-3. Check the local API health: `curl http://localhost:3747/health`
-4. Check cloud reachability only for backup sync: `curl https://what-next-production.up.railway.app/health`
-
-**macOS auto-watchdog (Hermes users)**
-
-If you're running Hermes, the `com.hermes.healthcheck` LaunchAgent monitors the whole stack every 5 minutes and auto-restarts dead LaunchAgents:
+A terminal-native interface to What Next. Talks to the local REST API at `localhost:3747`.
 
 ```bash
-# Check watchdog status
-launchctl list com.hermes.healthcheck
-
-# View watchdog log
-cat ~/Library/Logs/hermes/health.log | tail -30
-
-# Run a manual health check immediately
-cd ~/Documents/projects/hermes && npm run health
+npm link   # one-time - makes wn available in any terminal
 ```
 
-**Cloud health check**
 ```bash
-curl https://what-next-production.up.railway.app/health
-# → {"ok":true,"service":"what-next-cloud"}
-curl -H "x-api-key: your_key" https://what-next-production.up.railway.app/stats
-# → {"sessions":N,"facts":N,"projects":N,...}
+wn context                  # full brain dump - projects, sessions, facts
+wn next                     # open next steps across all projects
+wn projects                 # list all projects
+wn project <name>           # full session history for a project
+wn search "supabase auth"   # hybrid search across all memories
+wn dump                     # save a session (auto-detects current git repo)
+wn fact "always use conventional commits"
+wn status                   # local API health + cloud sync status
+wn open                     # open the web UI in your browser
+wn install --client codex --key bak_xxx
 ```
+
+Short aliases: `ctx`, `n`, `ps`, `p`, `s`, `d`, `f`, `i`. Colour output is TTY-aware.
 
 ---
 
@@ -317,13 +248,9 @@ mcp_servers:
       WHATNEXT_API_KEY: "your_api_key_here"
 ```
 
-Hermes will then have access to the same memory tools on your phone via Telegram.
+**Model fallback - never get cut off mid-session**
 
-**Model fallback — never get cut off mid-session**
-
-When your primary model hits a rate limit or runs out of credits, Hermes falls through a chain of alternatives automatically. The key insight: OpenRouter's `:free` models require no credits at all — they work even at a $0 balance, just with rate limits. Put them first in the chain so you always have a capable fallback that costs nothing.
-
-Add this to `~/.hermes/config.yaml` under your existing model config:
+When your primary model hits a rate limit or runs out of credits, Hermes falls through a chain of alternatives automatically. OpenRouter's `:free` models require no credits at all.
 
 ```yaml
 model:
@@ -331,32 +258,26 @@ model:
   provider: "openrouter"
 
 fallback_chain:
-  # Free tier — no credits needed, works at $0 balance (rate-limited)
   - provider: "openrouter"
     model: "deepseek/deepseek-chat-v3-0324:free"
     api_key_env: "OPENROUTER_API_KEY"
-  # Second free option if DeepSeek is rate-limited
   - provider: "openrouter"
     model: "meta-llama/llama-3.3-70b-instruct:free"
     api_key_env: "OPENROUTER_API_KEY"
-  # Paid fallback — Claude Haiku via direct Anthropic API
   - provider: "custom"
     model: "claude-haiku-4-5-20251001"
     base_url: "https://api.anthropic.com/v1"
     api_key_env: "ANTHROPIC_API_KEY"
-  # Last resort — Google Gemini direct
   - provider: "google-gemini"
     model: "gemini-2.5-flash"
     api_key_env: "GEMINI_API_KEY"
 ```
 
-> **Why this matters:** Claude Code and Claude Desktop subscriptions are UI products — their credits cannot be shared with API-based tools like Hermes. The `:free` fallbacks ensure your Telegram bot stays capable even when paid credits on any provider are exhausted, without needing to top up immediately.
+**Tech Radar (optional daily digest)**
 
-**Tech Radar (Hermes optional feature)**
+What Next ships with a daily tech radar cron job for Hermes. Every morning at 06:00 it scans Hacker News and Reddit for AI/MCP/agent news and sends a Telegram digest.
 
-What Next ships with a daily tech radar cron job for Hermes. Every morning at 06:00 it scans Hacker News, Reddit r/LocalLLaMA, and r/MachineLearning for AI/MCP/agent news, sends a Telegram digest, and lets you reply "implement 1" to auto-apply a suggestion.
-
-To enable, add the job to `~/.hermes/cron/jobs.json`:
+Add to `~/.hermes/cron/jobs.json`:
 
 ```json
 [
@@ -367,9 +288,81 @@ To enable, add the job to `~/.hermes/cron/jobs.json`:
     "schedule": "0 6 * * *",
     "deliver": "origin",
     "enabled": true,
-    "created_at": "2026-04-11T07:00:00Z"
+    "created_at": "2026-01-01T06:00:00Z"
   }
 ]
+```
+
+---
+
+## Troubleshooting
+
+**Tools don't appear in Claude/VS Code**
+- Restart the app completely after running the installer - MCP config is read at startup only
+- Check the path: `~/what-next/bin/bootstrap-entry.js` - if you cloned elsewhere, update the path
+- Make sure `WHATNEXT_API_KEY` is set to your key
+- On Windows, use an absolute path like `C:\Users\<you>\what-next\bin\bootstrap-entry.js`
+
+**Claude Code: dump_session causes permission prompts**
+- This means a subagent or Bash curl is being used instead of the direct MCP call
+- In your CLAUDE.md, add: "Always call `mcp__what-next__dump_session` directly as a tool call. NEVER use the Agent tool to delegate a dump."
+- The MCP tool is auto-approved; Bash curl is not
+
+**Linux: MCP tools not appearing after install**
+- The installer writes to `~/.config/Claude/claude_desktop_config.json` by default
+- Override with: `XDG_CONFIG_HOME=/path/to/your/config node bin/install.js --client claude --key bak_xxx`
+- For VS Code on Linux, `~/.config/Code/User/mcp.json` is the standard path
+
+**"Invalid or missing API key" errors**
+- Your API key is wrong or missing from the config env block
+- Double-check you replaced `your_api_key_here` with the actual key from your welcome email
+
+**Session not syncing to cloud**
+- Local SQLite is still the primary store - your dump already succeeded locally
+- Cloud sync is backup-only and retries in the background
+- Check logs: `tail -n 40 ~/Library/Logs/what-next/mcp-audit.log`
+
+**`search_memories` returns nothing for certain queries**
+- Postgres full-text search rejects special characters like `:`, `(`, `)`, `!`, `@`
+- Handled automatically server-side since v0.1.1 - update to the latest version
+- Workaround on older versions: use plain words without punctuation
+
+**Hermes: "Resource deadlock avoided" on macOS**
+- Fixed in `file_operations.py` since v0.1.1
+- If still occurring: `launchctl stop ai.hermes.gateway && launchctl start ai.hermes.gateway`
+
+**Local service health check**
+```bash
+curl http://localhost:3747/health
+curl http://localhost:3747/context
+curl "http://localhost:3747/whats-next"
+curl "http://localhost:3747/hybrid-search?q=auth+bug"
+curl "http://localhost:3747/sync/status"
+```
+
+If the local service is down:
+- macOS: `launchctl start com.whatnextai.api`
+- Windows: `node "$env:USERPROFILE\what-next\bin\local-api.js"`
+- Linux: `node ~/what-next/bin/local-api.js`
+
+**macOS self-healing on boot:** The LaunchAgent runs `start-api.sh` on every login. If source code is missing it restores from GitHub; if node_modules are gone it runs `npm install`. What Next is resilient to accidental deletions.
+
+**dump_session is slow or hangs**
+1. Check logs: `tail -n 40 ~/Library/Logs/what-next/bootstrap.log`
+2. If it keeps hanging: start a new chat - VS Code/Claude spawns a fresh MCP process per conversation
+3. Check local API: `curl http://localhost:3747/health`
+
+**macOS auto-watchdog (Hermes users)**
+```bash
+launchctl list com.hermes.healthcheck       # check watchdog status
+cat ~/Library/Logs/hermes/health.log | tail -30
+cd ~/Documents/projects/hermes && npm run health   # manual health check
+```
+
+**Cloud health check**
+```bash
+curl https://what-next-production.up.railway.app/health
+curl -H "x-api-key: your_key" https://what-next-production.up.railway.app/stats
 ```
 
 ---
@@ -384,4 +377,4 @@ All data is isolated to your API key and stored in a private Postgres database o
 
 ## Stack
 
-Node.js · SQLite · Postgres · MCP SDK · Railway · LaunchAgent (macOS) / Task Scheduler (Windows) / systemd (Linux optional)
+Node.js - SQLite - Postgres - MCP SDK - Railway - LaunchAgent (macOS) / Task Scheduler (Windows) / systemd (Linux optional)
