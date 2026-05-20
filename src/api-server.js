@@ -10,9 +10,11 @@ try { require('dotenv').config(); } catch {} // Load .env if present (optional d
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, '..', 'data', 'what-next.db');
+const DATA_DIR = process.env.WHATNEXT_DATA_DIR || join(homedir(), '.whatnext', 'data');
+const DB_PATH = join(DATA_DIR, 'what-next.db');
 
 // ── DB integrity check on startup ──────────────────────────────────────────────
 // Validates schema is present and readable before serving any requests.

@@ -2,11 +2,13 @@ import Database from 'better-sqlite3';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
+import { homedir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, '..', 'data', 'what-next.db');
+const DATA_DIR = process.env.WHATNEXT_DATA_DIR || join(homedir(), '.whatnext', 'data');
+const DB_PATH = join(DATA_DIR, 'what-next.db');
 
-mkdirSync(join(__dirname, '..', 'data'), { recursive: true });
+mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(DB_PATH);
 
