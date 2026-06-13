@@ -86,9 +86,10 @@ test('bootstrap self-heal: wrapper exits 0 after clean install', async () => {
     return; // skip in CI
   }
 
-  const { execFileSync, spawnSync: sp } = await import('node:child_process');
-  const { existsSync, renameSync } = await import('node:fs');
-  const { resolve, dirname } = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const { existsSync, renameSync, mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { resolve, dirname, join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
   const { fileURLToPath } = await import('node:url');
 
   const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -98,42 +99,63 @@ test('bootstrap self-heal: wrapper exits 0 after clean install', async () => {
 
   assert.ok(existsSync(serverDir), 'SDK server dir must exist before test');
 
+  // Read the self-heal signal from the on-disk bootstrap.log, not piped stdio.
+  // bootstrap-entry.js writes the log synchronously (appendFileSync), so it
+  // survives the SIGTERM we use to stop the long-running server — whereas
+  // buffered pipe output is dropped on kill. Isolate it to a temp dir so we
+  // only observe this run, via the WHATNEXT_AUDIT_LOG_DIR hook.
+  const logDir = mkdtempSync(join(tmpdir(), 'whatnext-selfheal-'));
+  const logFile = join(logDir, 'bootstrap.log');
+
   // Corrupt: rename the server dir away
   renameSync(serverDir, backupDir);
   assert.ok(!existsSync(serverDir), 'SDK server dir should be gone after rename');
 
+  let child;
   try {
-    // Run wrapper — it should self-heal and start cleanly (we kill it after 4s)
-    const result = sp(
-      'bash',
-      [resolve(ROOT, 'bin/mcp-wrapper.sh')],
-      {
-        cwd: ROOT,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 8000,
-      }
-    );
+    child = spawn('bash', [resolve(ROOT, 'bin/mcp-wrapper.sh')], {
+      cwd: ROOT,
+      stdio: 'ignore',
+      env: { ...process.env, WHATNEXT_AUDIT_LOG_DIR: logDir },
+    });
 
-    const output = (result.stderr || '') + (result.stdout || '');
-    // Should see the self-heal message
-    assert.ok(
-      output.includes('npm install') || output.includes('self-heal'),
-      `Expected self-heal log in output. Got:\n${output}`
-    );
-    // Should NOT see exit-1 error from the missing module
-    assert.ok(
-      !output.includes('ERR_MODULE_NOT_FOUND') || output.includes('npm install'),
-      'If ERR_MODULE_NOT_FOUND appears it must be followed by recovery'
-    );
+    // Poll the log until self-heal completes (clean node_modules) or fails.
+    // Cold-cache npm install can take tens of seconds, so allow a generous
+    // ceiling; we exit the moment recovery is confirmed, so the happy path is fast.
+    const deadline = Date.now() + 90000;
+    let healed = false;
+    let failed = false;
+    while (Date.now() < deadline) {
+      if (existsSync(logFile)) {
+        const log = readFileSync(logFile, 'utf8');
+        if (log.includes('completed — retrying startup') || log.includes('imported successfully')) {
+          healed = true;
+          break;
+        }
+        if (/\[ERROR\].*npm install failed/.test(log)) {
+          failed = true;
+          break;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : '';
+    assert.ok(!failed, `Self-heal npm install failed. Log:\n${log}`);
+    assert.ok(log.includes('self-heal'), `Expected self-heal to trigger. Log:\n${log}`);
+    assert.ok(healed, `Expected self-heal to recover within deadline. Log:\n${log}`);
   } finally {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGTERM');
+    }
     // Always restore — whether test passed or failed
     if (!existsSync(serverDir) && existsSync(backupDir)) {
       renameSync(backupDir, serverDir);
     } else if (existsSync(backupDir)) {
       // npm install already restored it; remove the backup
-      execFileSync('rm', ['-rf', backupDir]);
+      rmSync(backupDir, { recursive: true, force: true });
     }
+    rmSync(logDir, { recursive: true, force: true });
     assert.ok(existsSync(serverDir), 'SDK server dir must be restored after test');
   }
 });
