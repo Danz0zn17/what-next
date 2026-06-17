@@ -7,14 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Hermes Agent is now a first-class What Next surface.** The Nous `hermes-agent` (Telegram, Desktop,
+  CLI) now behaves exactly like Claude Code/Copilot/Codex: it auto-orients from What Next memory at the
+  start of every session and saves a `dump_session` autonomously when work completes. This is driven by a
+  "New-Session Orientation Protocol" in the agent's `SOUL.md` system prompt (Hermes has no deterministic
+  context-injection hook, so the protocol is the robust, upgrade-proof mechanism). Verified end-to-end: a
+  cold project question auto-recalls the right project memory before answering.
+- **README setup guide for Hermes Agent** (step 7) and the orientation-protocol snippet, so any dev
+  self-hosting Hermes can wire What Next as a memory surface. Landing page now lists Hermes Agent as a
+  Live surface.
+
 ### Changed
-- **Hermes ecosystem surface upgraded to the Nous Hermes runtime (v0.16.0)**: The Hermes agent that
-  consumes What Next was migrated in place from a hand-rolled wrapper (v0.10 era) onto Nous Research's
-  `hermes-agent` v0.16.0. What Next's MCP integration was verified end-to-end against the upgraded
-  runtime — `what-next` MCP server connects, `dump_session` writes local + cloud, and the filesystem
-  context cards (`~/.whatnext/agents/{project}.md`) load on cold start. No What Next API changes were
-  required: the surface-agnostic MCP/file layer carried the agent upgrade with zero migration work,
-  which is the portability the v2.0.0 universal file layer was designed for.
+- **Hermes runtime upgraded to Nous `hermes-agent` v0.16.0** (migrated in place from a v0.10-era wrapper).
+  What Next's MCP + filesystem-card integration carried the upgrade with zero API changes - the
+  portability the v2.0.0 universal file layer was designed for.
 
 ---
 

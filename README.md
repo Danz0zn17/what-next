@@ -9,7 +9,7 @@
 
 **Your AI tools don't share memory. What Next gives them one.**
 
-What Next is a persistent memory engine for developers. It learns from every session you run, every commit you push, and every decision you make - then surfaces it instantly to Claude Code, Claude Desktop, Copilot, Cursor, or Codex. One memory. Every tool. Always current.
+What Next is a persistent memory engine for developers. It learns from every session you run, every commit you push, and every decision you make - then surfaces it instantly to Claude Code, Claude Desktop, Copilot, Cursor, Codex, or a self-hosted Hermes agent. One memory. Every tool. Always current.
 
 **v2.0 - Smart Context Cards:** After every session dump or git commit, What Next auto-generates a plain markdown file per project at `~/.whatnext/agents/{project}.md`. Any AI tool can read this file directly - no MCP required. It's always current because it updates on every commit.
 
@@ -38,7 +38,7 @@ dump_session              SQLite source of truth          backup only
 | VS Code Codex | `~/.codex/config.toml` |
 | GitHub Copilot CLI | `~/.config/github-copilot/mcp.json` |
 | Cursor | `.cursor/rules/` in project root |
-| Telegram / Hermes | `~/.hermes/config.yaml` |
+| Hermes Agent (Nous) | `~/.hermes/config.yaml` (MCP) + `~/.hermes/SOUL.md` (orientation) — Telegram, Desktop, CLI |
 
 ---
 
@@ -164,7 +164,42 @@ WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"
 WHATNEXT_API_KEY = "your_api_key_here"
 ```
 
-**7. Restart your AI tool**
+**7. Add to Hermes Agent (Nous, self-hosted)**
+
+Hermes is a first-class surface: it auto-orients from your What Next memory at the start of every session
+and saves a `dump_session` autonomously when work completes - the same reflexes as Claude Code.
+
+Add the MCP server to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  what-next:
+    command: node
+    args:
+      - /absolute/path/to/what-next/bin/bootstrap-entry.js
+      - src/server.js
+      - mcp
+    env:
+      WHATNEXT_PREFER_LOCAL: "1"
+      WHATNEXT_CLOUD_SYNC_MODE: background
+      WHATNEXT_CLOUD_URL: https://what-next-production.up.railway.app
+      WHATNEXT_API_KEY: your_api_key_here
+```
+
+Then give Hermes the orientation reflex in `~/.hermes/SOUL.md` (its system prompt) - a short standing
+directive so it loads memory before it answers:
+
+```markdown
+## What Next - New-Session Orientation Protocol (Non-Negotiable)
+On the first message of any new session, silently BEFORE replying:
+1. Determine the project from the working directory (or the question).
+2. Read `~/.whatnext/agents/<project>.md` (per-project) or `~/.whatnext/context.md` (global).
+3. Call get_orientation / get_context (surface: "hermes") when the task is project-specific.
+4. Only then answer, grounded in what you loaded.
+Save a dump_session silently at session end and after each completed milestone.
+```
+
+**8. Restart your AI tool**
 
 What Next will appear as available MCP tools: `dump_session`, `get_orientation`, `get_context`, `search_memories`, and more.
 
