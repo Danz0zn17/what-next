@@ -102,7 +102,7 @@ const HTML_FORM = `<!DOCTYPE html>
   <div id="tab-dump" class="panel active">
     <label>Project Name <span class="required">*</span></label>
     <input id="d-project" placeholder="e.g. what-next, my-saas-app" />
-    <p class="hint">Use the same name as your folder in ~/Documents/projects/</p>
+    <p class="hint">Use the same name as your folder in ~/projects/</p>
 
     <label>Session Summary <span class="required">*</span></label>
     <textarea id="d-summary" placeholder="What happened this session? Keep it concise but complete."></textarea>

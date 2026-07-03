@@ -138,7 +138,7 @@ if (cloud.isEnabled()) {
 server.tool(
   'dump_session',
   {
-    project: z.string().describe('Project name (matches your folder name in ~/Documents/projects/)'),
+    project: z.string().describe('Project name (matches your folder name in ~/projects/)'),
     summary: z.string().describe('A concise summary of what happened this session'),
     what_was_built: z.string().optional().describe('Specific features, files, or components built'),
     decisions: z.string().optional().describe('Key architectural or design decisions made'),
@@ -246,7 +246,7 @@ server.tool(
 server.tool(
   'update_project_intelligence',
   {
-    project: z.string().describe('Project name (matches folder name in ~/Documents/projects/)'),
+    project: z.string().describe('Project name (matches folder name in ~/projects/)'),
     repo_path: z.string().optional().describe('Absolute path to the repo on disk'),
     stack: z.string().optional().describe('Tech stack summary e.g. "React + Vite + Supabase + Railway"'),
     key_dirs: z.string().optional().describe('Where things live — key directories and what they contain'),

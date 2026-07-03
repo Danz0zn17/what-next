@@ -13,7 +13,7 @@
  *   - Clears the flag file when the installed version matches latest
  *
  * Update instructions shown to user:
- *   cd ~/Documents/projects/what-next
+ *   cd ~/projects/what-next
  *   git pull && npm install
  *   node bin/install.js --client <claude|vscode|codex> --key bak_xxx
  */

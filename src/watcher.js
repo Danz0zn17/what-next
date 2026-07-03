@@ -1,7 +1,7 @@
 /**
  * What Next — Git Commit Watcher
  *
- * Polls ~/Documents/projects/ every 60 seconds. Detects new git commits
+ * Polls ~/projects/ every 60 seconds. Detects new git commits
  * and posts them to the local REST API so context cards stay current
  * without any AI intervention.
  *
@@ -13,7 +13,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const PROJECTS_DIR = join(homedir(), 'Documents', 'projects');
+const PROJECTS_DIR = process.env.WHATNEXT_PROJECTS_DIR || join(homedir(), 'projects');
 const STATE_FILE = join(homedir(), '.whatnext', 'watcher-state.json');
 const API_URL = `http://127.0.0.1:${process.env.WHATNEXT_PORT ?? 3747}`;
 const POLL_INTERVAL_MS = 60_000;

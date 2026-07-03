@@ -19,6 +19,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Live surface.
 
 ### Changed
+- **Default projects directory is now `~/projects/`** (was `~/Documents/projects/`). The git watcher and
+  all doc strings point at `~/projects/` to avoid iCloud sync/eviction deadlocks under `~/Documents`.
+  Override with the `WHATNEXT_PROJECTS_DIR` env var if your repos live elsewhere.
 - **Hermes runtime upgraded to Nous `hermes-agent` v0.16.0** (migrated in place from a v0.10-era wrapper).
   What Next's MCP + filesystem-card integration carried the upgrade with zero API changes - the
   portability the v2.0.0 universal file layer was designed for.
