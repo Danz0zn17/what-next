@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **npm v12 compatibility (`allowScripts` allowlist).** npm v12 (shipping July 2026) defaults
+  install scripts to OFF for all packages. Added an `allowScripts` block in `package.json`
+  covering every dep with native build steps: `better-sqlite3`, `sharp`, `onnxruntime-node`,
+  `protobufjs`, and `fsevents`. A plain `npm install` now builds all native bindings correctly
+  under npm 12.0.0-pre.1 without extra flags or manual approval steps.
 - **Hermes Agent is now a first-class What Next surface.** The Nous `hermes-agent` (Telegram, Desktop,
   CLI) now behaves exactly like Claude Code/Copilot/Codex: it auto-orients from What Next memory at the
   start of every session and saves a `dump_session` autonomously when work completes. This is driven by a

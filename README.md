@@ -46,6 +46,7 @@ dump_session              SQLite source of truth          backup only
 
 - **macOS, Windows, or Linux**
 - **Node.js 20+** - install via [nodejs.org](https://nodejs.org)
+- **npm 7+** (bundled with Node 20+). npm v12 (shipping July 2026) blocks install scripts by default; What Next's `package.json` ships an `allowScripts` allowlist covering all native deps, so `npm install` continues to work without extra flags.
 - At least one AI surface: Claude Code, Claude Desktop, VS Code with Copilot, Cursor, etc.
 
 ---
@@ -331,6 +332,14 @@ Add to `~/.hermes/cron/jobs.json`:
 ---
 
 ## Troubleshooting
+
+**npm v12: native modules not built after `npm install`**
+npm v12 (July 2026+) blocks install scripts for all packages by default. What Next ships an `allowScripts` field in `package.json` that covers `better-sqlite3`, `sharp`, `onnxruntime-node`, `protobufjs`, and `fsevents`. A fresh `npm install` should build all native bindings automatically.
+
+If you installed before upgrading to npm v12, delete `node_modules/` and re-run `npm install`. To inspect which packages have pending scripts:
+```bash
+npm approve-scripts --allow-scripts-pending
+```
 
 **Tools don't appear in Claude/VS Code**
 - Restart the app completely after running the installer - MCP config is read at startup only
