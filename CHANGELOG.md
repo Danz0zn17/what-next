@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **`bin/reconcile-signups.js` - safety net for the beta signup pipeline.** Netlify fires
+  `submission-created` at most once per submission, so a signup flagged as spam at ingest (or a transient
+  failure calling Railway) is lost silently - no user row, no API key, no welcome email. The script diffs
+  verified Netlify form submissions against the `users` table and issues keys for anyone missing, via
+  `POST /admin/users`. Dry run by default; `--apply` to issue. Caught one real dropped signup from
+  2026-07-25.
 - **Hermes Agent is now a first-class What Next surface.** The Nous `hermes-agent` (Telegram, Desktop,
   CLI) now behaves exactly like Claude Code/Copilot/Codex: it auto-orients from What Next memory at the
   start of every session and saves a `dump_session` autonomously when work completes. This is driven by a
