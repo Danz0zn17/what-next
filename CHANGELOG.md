@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [2.1.1] - 2026-08-19
+
 ### Security
 - **Cleared all 18 open Dependabot alerts (5 high, 11 moderate, 2 low).** `npm audit fix` bumped
   transitive deps (hono, @hono/node-server, fast-uri, ip-address, tar, protobufjs, body-parser) to

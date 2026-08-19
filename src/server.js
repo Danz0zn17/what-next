@@ -15,7 +15,7 @@ import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '2.1.0',
+  version: '2.1.1',
 });
 
 // ─── Tool timeout + error logging helpers ─────────────────────────────────────
