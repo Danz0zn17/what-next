@@ -95,6 +95,8 @@ function runNpmInstall(offline) {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8',
+    // npm is npm.cmd on Windows — spawning it without a shell fails (EINVAL)
+    shell: process.platform === 'win32',
   });
   return result.status === 0
     ? { ok: true }

@@ -72,7 +72,7 @@ test('isNativeBinary handles error with no message', () => {
 });
 
 test('npm install --version exits 0 (npm is available)', () => {
-  const result = spawnSync('npm', ['--version'], { encoding: 'utf8' });
+  const result = spawnSync('npm', ['--version'], { encoding: 'utf8', shell: process.platform === 'win32' });
   assert.equal(result.status, 0, 'npm must be available on PATH for self-heal to work');
 });
 

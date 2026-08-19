@@ -43,6 +43,8 @@ async function main() {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf8',
+      // npm is npm.cmd on Windows — spawning it without a shell fails (EINVAL)
+      shell: process.platform === 'win32',
     });
     if (result.status === 0) {
       log('INFO', 'npm install completed — dependency restored');

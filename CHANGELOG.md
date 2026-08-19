@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- **Cleared all 18 open Dependabot alerts (5 high, 11 moderate, 2 low).** `npm audit fix` bumped
+  transitive deps (hono, @hono/node-server, fast-uri, ip-address, tar, protobufjs, body-parser) to
+  patched versions within existing semver ranges. `sharp` (high, inherited libvips CVEs) had no fix
+  through its parent `@huggingface/transformers`, so it is forced to `^0.35.3` via an npm override -
+  verified: full test suite green and local embedding generation unaffected. `npm audit`: 0 vulnerabilities.
+
+### Fixed
+- **Windows self-heal was silently broken**: every `spawnSync('npm', ...)` call (bootstrap-entry
+  repairDeps, healthcheck dependency restore, and the CI test) spawned `npm` without a shell, which
+  fails on Windows where npm is `npm.cmd` (modern Node returns EINVAL). All three call sites now pass
+  `shell: process.platform === 'win32'`. This was also the cause of the Windows CI job failing on
+  every push to main since June.
+
 ---
 
 ## [2.1.0] - 2026-08-19
