@@ -442,6 +442,8 @@
     .stagger-2 { transition-delay: 0.14s; }
     .stagger-3 { transition-delay: 0.22s; }
     .stagger-4 { transition-delay: 0.30s; }
+    .stagger-5 { transition-delay: 0.38s; }
+    .feature-card-wide { grid-column: 1 / -1; }
     .hero-content { animation: slideUp 0.75s cubic-bezier(0.16,1,0.3,1) both; }
     @keyframes slideUp { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
 
@@ -620,7 +622,7 @@
   <div class="container">
     <div class="reveal">
       <div class="label">What's new in v2</div>
-      <h2>Four layers of<br>persistent intelligence</h2>
+      <h2>Five layers of<br>persistent intelligence</h2>
       <p class="features-desc">
         What Next v2 goes beyond session notes. It builds a living knowledge base about every project - automatically maintained, readable by any AI tool, updated on every git commit.
       </p>
@@ -657,6 +659,14 @@
         <h3>Universal file layer</h3>
         <p>Context cards are plain markdown files on your machine. Copilot reads them directly from its instructions file. Claude reads them via MCP. Cursor reads them as rules. Works with every tool, no API needed.</p>
         <span class="feature-tag">works without MCP</span>
+      </div>
+      <div class="feature-card feature-card-wide reveal stagger-5">
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 4h14l-5.5 6.5V16l-3 1.5v-7L3 4z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Self-curating memory</h3>
+        <p>Memory that reviews itself. A daily background loop scans your saved facts for near-duplicates and archives them automatically - non-destructively, fully offline, using local embeddings. No LLM bill, no config. Similar-but-different facts get flagged for your review, never silently merged. Your context cards stay tight: no doubled facts, no stale noise.</p>
+        <span class="feature-tag">new in v2.1 - runs daily, fully local</span>
       </div>
     </div>
   </div>

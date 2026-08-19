@@ -119,6 +119,21 @@ try { db.exec('ALTER TABLE facts    ADD COLUMN cloud_id TEXT'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_cloud_id ON sessions(cloud_id) WHERE cloud_id IS NOT NULL'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_cloud_id    ON facts(cloud_id)    WHERE cloud_id IS NOT NULL'); } catch {}
 
+// Migrations: memory curator (v2.1.0) — fact archival + run history (safe to run on existing DBs)
+try { db.exec("ALTER TABLE facts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN superseded_by INTEGER'); } catch {}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS curation_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    dry_run       INTEGER NOT NULL DEFAULT 0,
+    facts_scanned INTEGER NOT NULL,
+    auto_archived INTEGER NOT NULL,
+    flagged       INTEGER NOT NULL,
+    report        TEXT NOT NULL
+  );
+`);
+
 // --- Project helpers ---
 export function upsertProject(name, description = null) {
   const existing = db.prepare('SELECT id FROM projects WHERE name = ?').get(name);
@@ -243,6 +258,7 @@ export function getAllFacts() {
     SELECT f.*, p.name as project_name
     FROM facts f
     LEFT JOIN projects p ON p.id = f.project_id
+    WHERE f.status = 'active'
     ORDER BY f.created_at DESC
   `).all();
 }
@@ -264,7 +280,7 @@ export function searchMemories(query, limit = 10) {
     FROM facts_fts
     JOIN facts f ON f.id = facts_fts.rowid
     LEFT JOIN projects p ON p.id = f.project_id
-    WHERE facts_fts MATCH ?
+    WHERE facts_fts MATCH ? AND f.status = 'active'
     ORDER BY rank
     LIMIT ?
   `).all(query, limit);
@@ -293,6 +309,44 @@ export function getSessionById(id) {
 export function getFactById(id) {
   const f = db.prepare('SELECT f.*, p.name as project_name FROM facts f LEFT JOIN projects p ON p.id = f.project_id WHERE f.id = ?').get(id);
   return f;
+}
+
+// --- Curation helpers ---
+export function getActiveFacts() {
+  return db.prepare(`
+    SELECT f.*, p.name as project_name
+    FROM facts f
+    LEFT JOIN projects p ON p.id = f.project_id
+    WHERE f.status = 'active'
+    ORDER BY f.created_at ASC, f.id ASC
+  `).all();
+}
+
+export function getFactEmbeddings() {
+  return db.prepare(`SELECT row_id, embedding FROM embeddings WHERE rowtype = 'fact'`).all()
+    .map(r => ({ row_id: r.row_id, embedding: JSON.parse(r.embedding) }));
+}
+
+export function archiveFact(id, supersededBy = null) {
+  const result = db.prepare(`
+    UPDATE facts SET status = 'archived', superseded_by = ? WHERE id = ? AND status = 'active'
+  `).run(supersededBy, id);
+  if (result.changes > 0) {
+    db.prepare(`DELETE FROM embeddings WHERE rowtype = 'fact' AND row_id = ?`).run(id);
+  }
+  return result.changes > 0;
+}
+
+export function recordCurationRun({ dry_run, facts_scanned, auto_archived, flagged, report }) {
+  db.prepare(`
+    INSERT INTO curation_runs (dry_run, facts_scanned, auto_archived, flagged, report)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(dry_run ? 1 : 0, facts_scanned, auto_archived, flagged, JSON.stringify(report));
+}
+
+export function getLastCurationRun() {
+  const row = db.prepare('SELECT * FROM curation_runs ORDER BY id DESC LIMIT 1').get();
+  return row ? { ...row, dry_run: row.dry_run === 1, report: JSON.parse(row.report) } : null;
 }
 
 // --- Project intelligence helpers ---

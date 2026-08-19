@@ -7,7 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [2.1.0] - 2026-08-19
+
 ### Added
+- **Memory Curator - the brain now reviews itself.** A background evaluation loop scans stored facts
+  for near-duplicates using the local embedding index (all-MiniLM-L6-v2 - fully offline, no LLM API
+  key needed, zero cost). Near-identical facts in the same scope (>= 0.95 cosine similarity, same
+  project or both global) are archived non-destructively: `status='archived'` plus a `superseded_by`
+  pointer to the surviving fact - never deleted, always recoverable by ID. Similar-but-not-identical
+  pairs (0.85-0.95) are flagged for review and left untouched. Sessions are never curated - they are
+  a time-stamped journal, not a fact store.
+- **`curate_memory` MCP tool** - run the curator on demand from any surface. Pass `dry_run: true` to
+  preview what would be archived without changing anything.
+- **REST endpoints**: `POST /curate` (body `{"dry_run": true|false}`) runs the curator;
+  `GET /curate/status` returns the last run's report.
+- **Daily background run** in the local API server (60s after boot, then every 24h). Kill switch:
+  set `WHATNEXT_CURATOR=0` to disable the periodic run (on-demand still works).
+- **DB migrations (additive, safe on existing databases)**: `status` + `superseded_by` columns on
+  `facts`, new `curation_runs` history table.
+- **Tests**: `test/curator.test.js` - pure pair detection (thresholds, scope isolation, duplicate
+  chains, unindexed facts) plus an end-to-end archive-and-filter cycle against a temp SQLite DB.
+
 - **`bin/reconcile-signups.js` - safety net for the beta signup pipeline.** Netlify fires
   `submission-created` at most once per submission, so a signup flagged as spam at ingest (or a transient
   failure calling Railway) is lost silently - no user row, no API key, no welcome email. The script diffs
@@ -25,6 +47,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Live surface.
 
 ### Changed
+- **Context reads now surface only active facts.** `get_context`, `get_orientation`, `/context`,
+  keyword search, and Smart Context Cards all exclude archived facts - no more doubled entries.
+  Archiving a fact also removes its embedding, so semantic and hybrid search stay consistent.
+  Direct lookup by ID still returns archived rows for recovery.
+- **MCP server version 2.0.0 to 2.1.0** (package.json + McpServer version field).
 - **Default projects directory is now `~/projects/`** (was `~/Documents/projects/`). The git watcher and
   all doc strings point at `~/projects/` to avoid iCloud sync/eviction deadlocks under `~/Documents`.
   Override with the `WHATNEXT_PROJECTS_DIR` env var if your repos live elsewhere.

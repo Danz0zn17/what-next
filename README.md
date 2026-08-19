@@ -13,6 +13,8 @@ What Next is a persistent memory engine for developers. It learns from every ses
 
 **v2.0 - Smart Context Cards:** After every session dump or git commit, What Next auto-generates a plain markdown file per project at `~/.whatnext/agents/{project}.md`. Any AI tool can read this file directly - no MCP required. It's always current because it updates on every commit.
 
+**v2.1 - Self-Curating Memory:** The brain now reviews itself. A daily background loop scans your saved facts for near-duplicates using local embeddings (fully offline, no LLM API key, zero cost) and archives them non-destructively - the newest version survives, the older one keeps a `superseded_by` pointer and stays recoverable. Similar-but-not-identical facts are flagged for review, never auto-merged. Your context cards stay tight: no doubled facts, no stale noise. Run it on demand with the `curate_memory` tool (`dry_run: true` to preview) or `POST /curate`. Disable the daily run with `WHATNEXT_CURATOR=0`.
+
 Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
 
 ---
@@ -220,6 +222,7 @@ What Next will appear as available MCP tools: `dump_session`, `get_orientation`,
 | `list_projects` | See all known projects with session counts and last activity. |
 | `add_fact` | Store a persistent fact (preference, config, decision) not tied to a session. |
 | `edit_session` | Update fields on an existing session by local ID. |
+| `curate_memory` | Review stored facts for near-duplicates and archive them non-destructively. Runs daily in the background too - call with `dry_run: true` to preview. |
 
 ---
 
@@ -373,6 +376,7 @@ curl http://localhost:3747/context
 curl "http://localhost:3747/whats-next"
 curl "http://localhost:3747/hybrid-search?q=auth+bug"
 curl "http://localhost:3747/sync/status"
+curl "http://localhost:3747/curate/status"
 ```
 
 If the local service is down:

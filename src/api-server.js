@@ -43,10 +43,12 @@ import { startApiServer } from './api.js';
 import { startPeriodicSync } from './sync.js';
 import { checkForUpdate } from '../bin/update-check.js';
 import { startGitWatcher } from './watcher.js';
+import { startPeriodicCuration } from './curator.js';
 
 startApiServer();
 startPeriodicSync();
 startGitWatcher();
+startPeriodicCuration();
 
 // Non-blocking update check — shows once per session via flag file dedup
 checkForUpdate().catch(() => {});

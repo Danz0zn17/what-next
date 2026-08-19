@@ -64,6 +64,14 @@ curl -s "http://localhost:${WHATNEXT_PORT:-3747}/project/PROJECT-NAME"
 curl -s "http://localhost:${WHATNEXT_PORT:-3747}/whats-next"
 ```
 
+**To curate memory** — Archive near-duplicate facts non-destructively (runs daily on its own; `"dry_run": true` previews without changing anything):
+
+```bash
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/curate" \
+  -H 'Content-Type: application/json' \
+  -d '{"dry_run": true}'
+```
+
 **To search with hybrid ranking** — Better than plain keyword search (FTS5 + semantic RRF):
 
 ```bash

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince } from './db.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
+import { runCuration } from './curator.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
 import { syncPending, dumpToGist } from './gist-client.js';
@@ -14,7 +15,7 @@ import { buildUpdateNotice } from './update-check.js';
 
 const server = new McpServer({
   name: 'what-next',
-  version: '2.0.0',
+  version: '2.1.0',
 });
 
 // ─── Tool timeout + error logging helpers ─────────────────────────────────────
@@ -655,6 +656,49 @@ server.tool(
     } catch {
       return { content: [{ type: 'text', text: 'Could not reach cloud — feedback not sent.' }] };
     }
+  })
+);
+
+// ─── TOOL: curate_memory ─────────────────────────────────────────────────────
+server.tool(
+  'curate_memory',
+  {
+    dry_run: z.boolean().optional().default(false).describe('Preview what would be archived without changing anything'),
+  },
+  withTimeout('curate_memory', async ({ dry_run }) => {
+    const report = await runCuration({ apply: !dry_run });
+    logAudit('curate_memory', `scanned ${report.facts_scanned}, ${dry_run ? 'would archive' : 'archived'} ${report.auto_archived.length}, flagged ${report.flagged_for_review.length}`);
+
+    const lines = [`## Memory Curation${dry_run ? ' (dry run — nothing changed)' : ''}`];
+    lines.push(`Scanned ${report.facts_scanned} active fact(s) in ${report.duration_ms}ms.`);
+    lines.push('');
+
+    if (report.auto_archived.length > 0) {
+      lines.push(`**${dry_run ? 'Would archive' : 'Archived'} ${report.auto_archived.length} near-duplicate(s)** (newest kept, archived facts recoverable by ID):`);
+      for (const p of report.auto_archived) {
+        lines.push(`- #${p.archived_id} → superseded by #${p.kept_id} (${p.similarity}) [${p.project ?? 'global'}]`);
+        lines.push(`  "${p.archived_excerpt}"`);
+      }
+      lines.push('');
+    } else {
+      lines.push('No near-duplicates found.');
+      lines.push('');
+    }
+
+    if (report.flagged_for_review.length > 0) {
+      lines.push(`**Flagged ${report.flagged_for_review.length} similar pair(s) for review** (no changes made):`);
+      for (const p of report.flagged_for_review) {
+        lines.push(`- #${p.a_id} vs #${p.b_id} (${p.similarity}) [${p.project ?? 'global'}]`);
+        lines.push(`  "${p.a_excerpt}" vs "${p.b_excerpt}"`);
+      }
+      lines.push('');
+    }
+
+    if (report.unindexed_remaining > 0) {
+      lines.push(`${report.unindexed_remaining} fact(s) not yet indexed — run curate_memory again to index more.`);
+    }
+
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   })
 );
 

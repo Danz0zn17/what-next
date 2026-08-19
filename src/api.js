@@ -14,15 +14,18 @@
  *   POST /semantic-search       → Vector/semantic search memories
  *   GET  /whats-next            → Open next_steps across all projects
  *   GET  /sync/status           → Cloud sync health
+ *   POST /curate                → Run the memory curator (body: { dry_run?: boolean })
+ *   GET  /curate/status         → Last curation run summary
  *   GET  /context               → Session-start brief (recent sessions + facts + projects)
  *   GET  /projects              → List all projects
  *   GET  /project/:name         → Get full project history
  */
 
 import { createServer } from 'http';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun } from './db.js';
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
+import { runCuration } from './curator.js';
 
 // Embeddings require native onnxruntime binaries and can be slow/dataless on
 // macOS boot. Load them only when semantic search is actually requested so the
@@ -685,6 +688,19 @@ export function startApiServer() {
       if (method === 'GET' && url.pathname === '/sync/status') {
         const status = getSyncStatus();
         return send(res, 200, status);
+      }
+
+      // POST /curate — run the memory curator (body: { dry_run?: boolean })
+      if (method === 'POST' && url.pathname === '/curate') {
+        const body = await parseBody(req);
+        const report = await runCuration({ apply: body.dry_run !== true });
+        return send(res, 200, report);
+      }
+
+      // GET /curate/status — last curation run summary
+      if (method === 'GET' && url.pathname === '/curate/status') {
+        const last = getLastCurationRun();
+        return send(res, 200, last ?? { ran_at: null, message: 'No curation run yet' });
       }
 
       // POST /semantic-search — vector similarity search
