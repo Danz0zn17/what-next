@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Skills-CLI install path documented**: `npx skills@latest add Danz0zn17/what-next` installs the
+  What Next skill into any repo (`.agents/skills/what_next/`, symlinked for Claude Code) - agents
+  use the local REST API with zero MCP configuration. Verified end-to-end against the live CLI.
+- **"Handoff, automated" positioning** on README and landing page (compare table row + intro line):
+  manual `/handoff` summaries in popular agent-skill workflows are what `dump_session` + context
+  cards do automatically and permanently.
+
+### Fixed
+- Skill card `homepage` corrected to `whatnextai.co.za` (was a non-existent domain).
+
 ---
 
 ## [2.1.1] - 2026-08-19

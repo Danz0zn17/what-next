@@ -1,7 +1,7 @@
 ---
 name: what_next
 description: Persistent project memory across conversations. Save work sessions, decisions, and facts to What Next. Recall project history and context from past sessions. Use when starting work on a named project, finishing a meaningful task, or storing a key technical insight.
-homepage: https://whatnext.ai
+homepage: https://whatnextai.co.za
 metadata: {"openclaw": {"emoji": "🧠", "requires": {"bins": ["curl"]}}}
 ---
 

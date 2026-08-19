@@ -13,6 +13,8 @@ What Next is a persistent memory engine for developers. It learns from every ses
 
 **v2.0 - Smart Context Cards:** After every session dump or git commit, What Next auto-generates a plain markdown file per project at `~/.whatnext/agents/{project}.md`. Any AI tool can read this file directly - no MCP required. It's always current because it updates on every commit.
 
+**The `/handoff` step, automated.** Popular agent-skill workflows end big sessions with a manual handoff - writing a markdown summary so the next session starts oriented. What Next is that step automated and permanent: every session dump and git commit updates persistent context cards, shared across every tool, with memory that curates itself.
+
 **v2.1 - Self-Curating Memory:** The brain now reviews itself. A daily background loop scans your saved facts for near-duplicates using local embeddings (fully offline, no LLM API key, zero cost) and archives them non-destructively - the newest version survives, the older one keeps a `superseded_by` pointer and stays recoverable. Similar-but-not-identical facts are flagged for review, never auto-merged. Your context cards stay tight: no doubled facts, no stale noise. Run it on demand with the `curate_memory` tool (`dry_run: true` to preview) or `POST /curate`. Disable the daily run with `WHATNEXT_CURATOR=0`.
 
 Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
@@ -204,6 +206,16 @@ Save a dump_session silently at session end and after each completed milestone.
 **8. Restart your AI tool**
 
 What Next will appear as available MCP tools: `dump_session`, `get_orientation`, `get_context`, `search_memories`, and more.
+
+### Or: install as an agent skill (no MCP config)
+
+For agents that support the skills format (Claude Code, Codex, Copilot, Amp, and many more), install What Next as a skill in any repo:
+
+```bash
+npx skills@latest add Danz0zn17/what-next
+```
+
+This drops the skill into `.agents/skills/what_next/` (symlinked for Claude Code). Your agent then saves and recalls memory over the local REST API at `localhost:3747` - no MCP configuration needed. The local service from step 2 must be running.
 
 ---
 
