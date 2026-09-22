@@ -197,11 +197,22 @@ directive so it loads memory before it answers:
 ## What Next - New-Session Orientation Protocol (Non-Negotiable)
 On the first message of any new session, silently BEFORE replying:
 1. Determine the project from the working directory (or the question).
-2. Read `~/.whatnext/agents/<project>.md` (per-project) or `~/.whatnext/context.md` (global).
+2. Read `~/.whatnext/brief.md` (global lessons + pointers) and `~/.whatnext/agents/<project>.md` (per-project). `~/.whatnext/context.md` holds the full cross-project brief when you need it.
 3. Call get_orientation / get_context (surface: "hermes") when the task is project-specific.
 4. Only then answer, grounded in what you loaded.
 Save a dump_session silently at session end and after each completed milestone.
 ```
+
+**7b. Optional: inject context automatically (Claude Code)**
+
+Add a SessionStart hook so every session opens already oriented, at about 1 KB of context:
+
+```json
+{ "hooks": { "SessionStart": [ { "matcher": "", "hooks": [ { "type": "command", "timeout": 5,
+  "command": "P=$(basename \"$PWD\"); { cat \"$HOME/.whatnext/brief.md\"; cat \"$HOME/.whatnext/agents/$P.md\"; } 2>/dev/null; true" } ] } ] } }
+```
+
+The brief is six lines (global lessons plus where everything else lives). The rest is a tool call away.
 
 **8. Restart your AI tool**
 
@@ -236,7 +247,7 @@ This drops the skill into `.agents/skills/what_next/` (symlinked for Claude Code
 | `edit_session` | Update fields on an existing session by local ID. |
 | `curate_memory` | Review stored facts for near-duplicates and archive them non-destructively. Runs daily in the background too - call with `dry_run: true` to preview. |
 
-**Schema footprint:** the full `tools/list` payload for all 14 tools is about 6.2 KB (roughly 1,600 tokens).
+**Schema footprint:** the full `tools/list` payload for all 14 tools, descriptions included, is about 8 KB (roughly 2,000 tokens).
 That is what every session pays to have What Next available, before any tool is called.
 
 ---

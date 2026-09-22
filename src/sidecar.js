@@ -8,6 +8,9 @@
  *   ~/.whatnext/agents/{project}.md  — per-project orientation card
  *   ~/.whatnext/context.md           — global pointer + cross-project brief
  *   ~/.copilot/copilot-instructions.md — Copilot session-start instructions
+ *   ~/.whatnext/brief.md             - six-line session brief: global lessons + where the rest lives.
+ *                                        Inject this plus the project card at session start and pull
+ *                                        the full brief on demand.
  *   {repo}/AGENTS.md                  - pointer block (only when AGENTS.md exists
  *                                        or the repo has neither AGENTS.md nor CLAUDE.md)
  *
@@ -23,6 +26,7 @@ import { getProjectIntelligence, getRecentSessions, getWhatsNext, getAllFacts, l
 const HOME = homedir();
 const AGENTS_DIR = join(HOME, '.whatnext', 'agents');
 const CONTEXT_FILE = join(HOME, '.whatnext', 'context.md');
+const BRIEF_FILE = join(HOME, '.whatnext', 'brief.md');
 const COPILOT_DIR = join(HOME, '.copilot');
 const COPILOT_INSTRUCTIONS = join(COPILOT_DIR, 'copilot-instructions.md');
 const CARD_WARN_CHARS = 12_000; // ~3k tokens - beyond this the card stops being "zero-cost"
@@ -276,9 +280,30 @@ export function writeGlobalContext() {
 
     writeFileSync(CONTEXT_FILE, lines.join('\n'), 'utf8');
 
+    writeSessionBrief(lessons);
     writeCopilotInstructions();
   } catch (err) {
     process.stderr.write(`[sidecar] Failed to write global context: ${err.message}\n`);
+  }
+}
+
+// The part of the global brief worth paying for on every session start: the
+// lessons, and one line saying where the rest is. Everything else is a tool
+// call away. Header is byte-stable; no date.
+function writeSessionBrief(lessons) {
+  try {
+    const lines = ['# What Next | Session Brief', ''];
+    if (lessons.length > 0) {
+      lines.push('## Lessons (do not repeat these mistakes)');
+      for (const f of lessons.slice(0, 5)) lines.push(`- ${truncate(f.content, 200)}`);
+      lines.push('');
+    }
+    lines.push('Project card follows (stack, gotchas, recent work, open tasks). For the portfolio, other projects and');
+    lines.push('preferences call `get_context` or `whats_next`, or read ~/.whatnext/context.md. Search memory with');
+    lines.push('`search_memories` (time phrases work: "auth decisions in August"). Save a `dump_session` at milestones.');
+    writeFileSync(BRIEF_FILE, lines.join('\n') + '\n', 'utf8');
+  } catch (err) {
+    process.stderr.write(`[sidecar] Failed to write session brief: ${err.message}\n`);
   }
 }
 
@@ -307,11 +332,7 @@ Also call \`dump_session\` via What Next MCP if available.
 - Footer on every site: Terms & Conditions link + "Built by Greenberries" linking to greenberries.co.za
 
 ## What Next MCP tools (if available)
-- \`get_context\` — full cross-project context snapshot
-- \`get_orientation\` — project-focused brief (stack + last 3 sessions + open tasks, under 2000 tokens)
-- \`update_project_intelligence\` — save what you learned about the codebase structure
-- \`dump_session\` — save session summary, decisions, next steps
-- \`search_memories\` / \`semantic_search\` — find past decisions and context
+Each tool describes itself. Start with \`get_orientation\`, end with \`dump_session\`.
 `;
     writeFileSync(COPILOT_INSTRUCTIONS, content, 'utf8');
   } catch (err) {

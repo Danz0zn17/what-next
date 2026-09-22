@@ -141,6 +141,7 @@ if (cloud.isEnabled()) {
 // ─── TOOL: dump_session ───────────────────────────────────────────────────────
 server.tool(
   'dump_session',
+  "Save what this session did: summary, what was built, decisions, next steps. Call at every milestone and at session end. Updates the project context card automatically.",
   {
     project: z.string().describe('Project name (matches your folder name in ~/projects/)'),
     summary: z.string().describe('A concise summary of what happened this session'),
@@ -176,6 +177,7 @@ server.tool(
 // ─── TOOL: get_context ───────────────────────────────────────────────────────
 server.tool(
   'get_context',
+  "Cross-project snapshot: active projects, recent sessions everywhere, global preferences. Use when the task spans projects or the card was not injected; for one project prefer get_orientation.",
   {
     surface: z.enum(['claude-code', 'copilot', 'codex', 'hermes', 'cursor', 'generic']).optional()
       .describe('Which AI surface is calling — shapes the response format and depth'),
@@ -249,15 +251,16 @@ server.tool(
 // ─── TOOL: update_project_intelligence ───────────────────────────────────────
 server.tool(
   'update_project_intelligence',
+  "Record what an agent cannot infer from the repo: gotchas, non-obvious conventions, deployment quirks, env var names. Rendered on the project card. Do not restate the file tree.",
   {
     project: z.string().describe('Project name (matches folder name in ~/projects/)'),
     repo_path: z.string().optional().describe('Absolute path to the repo on disk'),
     stack: z.string().optional().describe('Tech stack summary e.g. "React + Vite + Supabase + Railway"'),
-    key_dirs: z.string().optional().describe('Where things live — key directories and what they contain'),
-    conventions: z.string().optional().describe('Coding patterns, naming conventions, architectural rules'),
+    key_dirs: z.string().optional().describe("Only what the tree does not make obvious: where the entry points are, which dir is generated, where the real config lives"),
+    conventions: z.string().optional().describe("Rules an agent would get wrong without being told: naming, commit style, what must never be edited, required flags"),
     env_vars: z.string().optional().describe('Environment variable names (keys only, never values)'),
     deployment: z.string().optional().describe('How the app is deployed e.g. "Netlify (frontend) + Railway (backend)"'),
-    extra: z.string().optional().describe('Key decisions, gotchas, anything a new session should know'),
+    extra: z.string().optional().describe("Gotchas and decisions first: things that cost a past session time. Skip anything derivable from the code."),
   },
   withTimeout('update_project_intelligence', async (args) => {
     upsertProjectIntelligence(args);
@@ -286,6 +289,7 @@ server.tool(
 // ─── TOOL: get_orientation ────────────────────────────────────────────────────
 server.tool(
   'get_orientation',
+  "Start here for project work: stack, gotchas, last 3 sessions, open tasks, under 2000 tokens.",
   {
     project: z.string().describe('Project name to get a focused orientation brief for'),
   },
@@ -339,6 +343,7 @@ server.tool(
 // ─── TOOL: search_memories ────────────────────────────────────────────────────
 server.tool(
   'search_memories',
+  "Keyword search over sessions and facts. Understands time phrases (\"auth decisions in August\", \"surf-rides last week\", \"since 2026-07-01\"): the window is applied first, text ranked inside it.",
   {
     query: z.string().describe('Search query — can be a technology, concept, project name, or anything you remember working on'),
     limit: z.number().optional().default(5).describe('Max results to return'),
@@ -410,6 +415,7 @@ server.tool(
 // ─── TOOL: get_project ────────────────────────────────────────────────────────
 server.tool(
   'get_project',
+  "Full session history for one project, oldest to newest. Large; prefer get_orientation unless you need everything.",
   {
     name: z.string().describe('Project name to retrieve history for'),
   },
@@ -467,6 +473,7 @@ server.tool(
 // ─── TOOL: list_projects ─────────────────────────────────────────────────────
 server.tool(
   'list_projects',
+  "All known projects with session counts and last activity.",
   {},
   withTimeout('list_projects', async () => {
     let projects;
@@ -505,6 +512,7 @@ server.tool(
 // ─── TOOL: add_fact ───────────────────────────────────────────────────────────
 server.tool(
   'add_fact',
+  "Store a durable fact outside any session. Category \"lesson\" (a fixed mistake) is shown first on cards and never auto-archived; \"tour\" (a feature traced through its files) is shown on the project card.",
   {
     category: z.string().describe('Category e.g. "preference", "pattern", "lesson" (a fixed mistake, shown first on cards, never auto-archived), "tour" (a code tour: one feature traced through 5-6 files with function names, checks and change boundary, shown on the project card), "stack-choice"'),
     content: z.string().describe('The fact or insight to remember'),
@@ -534,6 +542,7 @@ server.tool(
 // Cloud-first (falls back to local embeddings if cloud unavailable)
 server.tool(
   'semantic_search',
+  "Meaning-based search when you lack exact words. With a time phrase, exact matches in that window rank first and embeddings fill the rest.",
   {
     query: z.string().describe('What you\'re looking for — describe it naturally, no need for exact keywords'),
     limit: z.number().optional().default(5).describe('Max results to return'),
@@ -649,6 +658,7 @@ server.tool(
 // ─── TOOL: edit_session ───────────────────────────────────────────────────────
 server.tool(
   'edit_session',
+  "Correct or extend a saved session by its local id.",
   {
     id: z.number().describe('Local session ID to edit (from dump_session response or search results)'),
     summary: z.string().optional().describe('Updated session summary'),
@@ -676,6 +686,7 @@ server.tool(
 // ─── TOOL: whats_next ─────────────────────────────────────────────────────────
 server.tool(
   'whats_next',
+  "Open next_steps across projects, newest first. The instant to-do list.",
   {
     limit: z.number().optional().default(8).describe('Max number of projects to include'),
   },
@@ -697,6 +708,7 @@ server.tool(
 // ─── TOOL: send_feedback ─────────────────────────────────────────────────────
 server.tool(
   'send_feedback',
+  "Send a bug report or feature request to the What Next maintainer.",
   {
     message: z.string().describe('Your feedback, bug report, or feature request'),
     type: z.enum(['bug', 'feature', 'general']).optional().describe('Type of feedback'),
@@ -718,6 +730,7 @@ server.tool(
 // ─── TOOL: curate_memory ─────────────────────────────────────────────────────
 server.tool(
   'curate_memory',
+  "Find and archive near-duplicate facts (recoverable). Runs daily on its own; call with dry_run to preview.",
   {
     dry_run: z.boolean().optional().default(false).describe('Preview what would be archived without changing anything'),
   },
@@ -761,6 +774,7 @@ server.tool(
 // ─── TOOL: since_last_session ────────────────────────────────────────────────
 server.tool(
   'since_last_session',
+  "What changed in a project since its last session: commits captured by the watcher, with Claude session links when present.",
   {
     project: z.string().describe('Project name to check'),
   },

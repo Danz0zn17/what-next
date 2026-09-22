@@ -71,3 +71,21 @@ test('global context: lessons before facts, stable header', () => {
   assert.ok(g.indexOf('## Lessons') < g.indexOf('## Global Facts'));
   assert.equal(g.split('\n')[1], '');
 });
+
+test('session brief: lessons plus one pointer, stable header, no date', () => {
+  writeGlobalContext();
+  const b = readFileSync(join(TEST_HOME, '.whatnext', 'brief.md'), 'utf8');
+  assert.equal(b.split('\n')[0], '# What Next | Session Brief');
+  assert.equal(b.split('\n')[1], '');
+  assert.ok(b.includes('global lesson'));
+  assert.ok(!b.includes('global pref'), 'preferences stay in context.md, not the brief');
+  assert.ok(b.includes('get_context'));
+  assert.ok(!/_Updated/.test(b));
+  assert.ok(b.length < 1500, `brief is ${b.length} chars`);
+});
+
+test('copilot instructions no longer duplicate the tool list', () => {
+  const c = readFileSync(join(TEST_HOME, '.copilot', 'copilot-instructions.md'), 'utf8');
+  assert.ok(c.includes('Each tool describes itself'));
+  assert.ok(!c.includes('full cross-project context snapshot'));
+});

@@ -8,6 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Session brief for progressive disclosure**: `~/.whatnext/brief.md` (global lessons plus one
+  pointer line, under 1 KB, byte-stable header) is written alongside `context.md`. Inject it with the
+  project card at session start and fetch the full cross-project brief on demand. README documents the
+  Claude Code SessionStart hook. `context.md` is unchanged for Hermes, Codex and Copilot readers.
+- **Tool descriptions**: every MCP tool now carries a one-line description with its usage guidance, so
+  prompts and instruction files no longer need to repeat what each tool is for. Copilot instructions
+  drop the duplicated tool list.
+- **Gotcha-first intelligence fields**: `update_project_intelligence` parameter hints now ask for what
+  an agent cannot infer from the repo instead of a restatement of the file tree.
 - **Hot Files on every context card**: the eight files changed most often in the last 30 days,
   derived from the git watcher's commit history. Lock files and build output are ignored. Nothing
   to write, nothing to maintain.
