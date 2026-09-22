@@ -3,6 +3,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
 import { homedir } from 'os';
+import { sanitizeFields, flagsToColumn, detectFlags, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, INTEL_TEXT_FIELDS } from './sanitize.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WHATNEXT_DATA_DIR || join(homedir(), '.whatnext', 'data');
@@ -119,6 +120,13 @@ try { db.exec('ALTER TABLE facts    ADD COLUMN cloud_id TEXT'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_cloud_id ON sessions(cloud_id) WHERE cloud_id IS NOT NULL'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_cloud_id    ON facts(cloud_id)    WHERE cloud_id IS NOT NULL'); } catch {}
 
+// Migration (v2.2.0): injection_flags records which stored-memory injection
+// patterns a row tripped when it was written. Flags never suppress a row; they
+// are a trail for a human. See src/sanitize.js.
+try { db.exec('ALTER TABLE sessions             ADD COLUMN injection_flags TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts                ADD COLUMN injection_flags TEXT'); } catch {}
+try { db.exec('ALTER TABLE project_intelligence ADD COLUMN injection_flags TEXT'); } catch {}
+
 // One-off cleanup (v2.2.0): remove sessions/facts that are exact echoes of a
 // row already present (same project + text), keeping the oldest row and its
 // cloud id. FTS rows and embeddings of removed rows are dropped too.
@@ -221,21 +229,27 @@ export function listProjects() {
 }
 
 // --- Session helpers ---
+// Every write below passes its replayed-into-context text through the injection
+// sanitiser first, whatever the caller: MCP tool, REST endpoint, ChatGPT import
+// or cloud sync pull. This is the single seam all of them share.
 export function addSession({ project, summary, what_was_built, decisions, stack, next_steps, tags }) {
   const projectId = upsertProject(project);
+  const { values: v, flags } = sanitizeFields(
+    { summary, what_was_built, decisions, stack, next_steps, tags }, SESSION_TEXT_FIELDS);
   const result = db.prepare(`
-    INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, summary, what_was_built ?? null, decisions ?? null, stack ?? null, next_steps ?? null, tags ?? null);
+    INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, injection_flags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, v.summary, v.what_was_built ?? null, v.decisions ?? null, v.stack ?? null, v.next_steps ?? null, v.tags ?? null, flagsToColumn(flags));
   return result.lastInsertRowid;
 }
 
 // --- Fact helpers ---
 export function addFact({ project, category, content, tags }) {
   const projectId = project ? upsertProject(project) : null;
+  const { values: v, flags } = sanitizeFields({ category, content, tags }, FACT_TEXT_FIELDS);
   const result = db.prepare(`
-    INSERT INTO facts (project_id, category, content, tags) VALUES (?, ?, ?, ?)
-  `).run(projectId, category, content, tags ?? null);
+    INSERT INTO facts (project_id, category, content, tags, injection_flags) VALUES (?, ?, ?, ?, ?)
+  `).run(projectId, v.category, v.content, v.tags ?? null, flagsToColumn(flags));
   return result.lastInsertRowid;
 }
 
@@ -244,15 +258,20 @@ export function editSession(id, updates) {
   const current = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
   if (!current) return false;
 
+  const { values: clean } = sanitizeFields(updates, SESSION_TEXT_FIELDS);
   const fields = [];
   const params = [];
-  for (const f of ['summary', 'what_was_built', 'decisions', 'stack', 'next_steps', 'tags']) {
+  for (const f of SESSION_TEXT_FIELDS) {
     if (updates[f] !== undefined) {
       fields.push(`${f} = ?`);
-      params.push(updates[f]);
+      params.push(clean[f]);
     }
   }
   if (fields.length === 0) return false;
+  // Re-flag against the row as it will read after the edit, not just the delta.
+  const merged = { ...current, ...clean };
+  fields.push('injection_flags = ?');
+  params.push(flagsToColumn(sanitizeFields(merged, SESSION_TEXT_FIELDS).flags));
   params.push(id);
 
   const result = db.prepare(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
@@ -441,14 +460,18 @@ export function getLastCurationRun() {
 // --- Project intelligence helpers ---
 export function upsertProjectIntelligence({ project, repo_path, stack, key_dirs, conventions, env_vars, deployment, extra }) {
   const projectId = upsertProject(project);
+  const { values: c, flags } = sanitizeFields(
+    { repo_path, stack, key_dirs, conventions, env_vars, deployment, extra }, INTEL_TEXT_FIELDS);
   const existing = db.prepare('SELECT id FROM project_intelligence WHERE project_id = ?').get(projectId);
   if (existing) {
     const fields = [];
     const params = [];
-    for (const [k, v] of Object.entries({ repo_path, stack, key_dirs, conventions, env_vars, deployment, extra })) {
+    for (const [k, v] of Object.entries(c)) {
       if (v !== undefined && v !== null) { fields.push(`${k} = ?`); params.push(v); }
     }
     if (fields.length) {
+      fields.push('injection_flags = ?');
+      params.push(flagsToColumn(flags));
       fields.push("updated_at = datetime('now')");
       params.push(projectId);
       db.prepare(`UPDATE project_intelligence SET ${fields.join(', ')} WHERE project_id = ?`).run(...params);
@@ -456,9 +479,9 @@ export function upsertProjectIntelligence({ project, repo_path, stack, key_dirs,
     return existing.id;
   }
   const result = db.prepare(`
-    INSERT INTO project_intelligence (project_id, repo_path, stack, key_dirs, conventions, env_vars, deployment, extra)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, repo_path ?? null, stack ?? null, key_dirs ?? null, conventions ?? null, env_vars ?? null, deployment ?? null, extra ?? null);
+    INSERT INTO project_intelligence (project_id, repo_path, stack, key_dirs, conventions, env_vars, deployment, extra, injection_flags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, c.repo_path ?? null, c.stack ?? null, c.key_dirs ?? null, c.conventions ?? null, c.env_vars ?? null, c.deployment ?? null, c.extra ?? null, flagsToColumn(flags));
   return result.lastInsertRowid;
 }
 
@@ -596,20 +619,25 @@ export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_w
     if (exists) return null;
   }
   const projectId = upsertProject(project_name);
+  // Sanitise before the twin lookup: a row written here was sanitised on the
+  // way in, so the cloud echo only matches it once it has been through the
+  // same pass. Cloud rows are the untrusted side of this boundary.
+  const { values: v, flags } = sanitizeFields(
+    { summary, what_was_built, decisions, stack, next_steps, tags }, SESSION_TEXT_FIELDS);
   // Same session already stored locally (written here, then echoed back by
   // the cloud): adopt the cloud id rather than inserting again.
   const twin = db.prepare(`
     SELECT id, cloud_id FROM sessions WHERE project_id = ? AND summary = ?
     ORDER BY (cloud_id IS NULL) DESC, id ASC LIMIT 1
-  `).get(projectId, summary);
+  `).get(projectId, v.summary);
   if (twin) {
     if (cloud_id && !twin.cloud_id) setSessionCloudId(twin.id, cloud_id);
     return null;
   }
   const result = db.prepare(`
-    INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, summary, what_was_built ?? null, decisions ?? null, stack ?? null, next_steps ?? null, tags ?? null, session_date ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null);
+    INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id, injection_flags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, v.summary, v.what_was_built ?? null, v.decisions ?? null, v.stack ?? null, v.next_steps ?? null, v.tags ?? null, session_date ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null, flagsToColumn(flags));
   return result.lastInsertRowid;
 }
 
@@ -620,19 +648,82 @@ export function upsertFactFromCloud({ cloud_id, project_name, category, content,
     if (exists) return null;
   }
   const projectId = project_name ? upsertProject(project_name) : null;
+  const { values: v, flags } = sanitizeFields({ category, content, tags }, FACT_TEXT_FIELDS);
   const twin = db.prepare(`
     SELECT id, cloud_id FROM facts WHERE project_id IS ? AND category = ? AND content = ?
     ORDER BY (cloud_id IS NULL) DESC, id ASC LIMIT 1
-  `).get(projectId, category, content);
+  `).get(projectId, v.category, v.content);
   if (twin) {
     if (cloud_id && !twin.cloud_id) setFactCloudId(twin.id, cloud_id);
     return null;
   }
   const result = db.prepare(`
-    INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(projectId, category, content, tags ?? null, created_at ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null);
+    INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id, injection_flags)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, v.category, v.content, v.tags ?? null, created_at ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null, flagsToColumn(flags));
   return result.lastInsertRowid;
+}
+
+// Populate injection_flags for rows written before the sanitiser existed.
+// Flags only: stored text is never rewritten here, because the render pass in
+// sidecar.js already escapes on the way out and silently editing a customer's
+// own memory is not this function's call to make.
+export function backfillInjectionFlags() {
+  const scanTable = (table, fields) => {
+    const rows = db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}`).all();
+    const stmt = db.prepare(`UPDATE ${table} SET injection_flags = ? WHERE id = ?`);
+    let flagged = 0;
+    db.transaction(() => {
+      for (const row of rows) {
+        const flags = new Set();
+        for (const field of fields) for (const name of detectFlags(row[field])) flags.add(name);
+        const col = flagsToColumn([...flags]);
+        if (col) { stmt.run(col, row.id); flagged++; }
+      }
+    })();
+    return { scanned: rows.length, flagged };
+  };
+  return {
+    sessions: scanTable('sessions', SESSION_TEXT_FIELDS),
+    facts: scanTable('facts', FACT_TEXT_FIELDS),
+  };
+}
+
+// Rows whose text tripped an injection pattern on the way in. Nothing here is
+// suppressed - this is the trail for a human deciding whether a memory is real.
+export function getFlaggedMemories(limit = 50) {
+  const sessions = db.prepare(`
+    SELECT s.id, p.name AS project_name, s.session_date, s.injection_flags,
+           substr(s.summary, 1, 200) AS preview
+    FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE s.injection_flags IS NOT NULL
+    ORDER BY s.id DESC LIMIT ?
+  `).all(limit);
+  const facts = db.prepare(`
+    SELECT f.id, p.name AS project_name, f.created_at, f.category, f.injection_flags,
+           substr(f.content, 1, 200) AS preview
+    FROM facts f LEFT JOIN projects p ON p.id = f.project_id
+    WHERE f.injection_flags IS NOT NULL
+    ORDER BY f.id DESC LIMIT ?
+  `).all(limit);
+  return { sessions, facts };
+}
+
+// One-off on first load after upgrade. Cheap (a regex pass over local rows)
+// and guarded, so it does not run again.
+try {
+  const done = db.prepare('SELECT value FROM sync_state WHERE key = ?').get('injection_flags_backfill');
+  if (!done) {
+    const r = backfillInjectionFlags();
+    db.prepare('INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)')
+      .run('injection_flags_backfill', new Date().toISOString());
+    const total = r.sessions.flagged + r.facts.flagged;
+    if (total > 0) {
+      process.stderr.write(`[what-next] injection check: ${r.sessions.flagged} session(s) and ${r.facts.flagged} fact(s) contain instruction-shaped text. Stored text is unchanged and escaped when rendered. Review: GET /flagged\n`);
+    }
+  }
+} catch {
+  // best-effort: never block startup on the backfill
 }
 
 export default db;

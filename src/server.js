@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { sanitizeFields, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS } from './sanitize.js';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
 import { parseTimeRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
@@ -138,6 +139,14 @@ if (cloud.isEnabled()) {
   }
 })();
 
+// Stored memory is replayed into the system context of later sessions, so text
+// that reads as an instruction is escaped (harness tags) or flagged (override
+// phrasing) on the way in. Nothing is dropped - this line is the trail.
+function injectionNote(flags) {
+  if (!flags || flags.length === 0) return '';
+  return `\n\nNote: this text tripped the stored-memory injection check [${flags.join(', ')}]. It is saved in full; harness tags are escaped so it cannot impersonate the harness when replayed. Review the full list at GET http://localhost:3747/flagged if it was not written by you.`;
+}
+
 // ─── TOOL: dump_session ───────────────────────────────────────────────────────
 server.tool(
   'dump_session',
@@ -153,6 +162,9 @@ server.tool(
   },
   withTimeout('dump_session', async (args) => {
     const id = addSession(args);
+    // The row is stored either way; this only tells the caller that its text
+    // read as an instruction and has been escaped or flagged. See sanitize.js.
+    const { flags } = sanitizeFields(args, SESSION_TEXT_FIELDS);
     const text = [args.summary, args.what_was_built, args.decisions, args.next_steps, args.tags].filter(Boolean).join(' ');
     generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
     logAudit('dump_session', `local write complete for session ${id} (${args.project})`);
@@ -168,7 +180,7 @@ server.tool(
     return {
       content: [{
         type: 'text',
-        text: `Session dumped [${sourceLabel}] (local id: ${id})\nProject: ${args.project}\nSummary: ${args.summary}`,
+        text: `Session dumped [${sourceLabel}] (local id: ${id})\nProject: ${args.project}\nSummary: ${args.summary}${injectionNote(flags)}`,
       }],
     };
   })
@@ -521,6 +533,7 @@ server.tool(
   },
   withTimeout('add_fact', async (args) => {
     const id = addFact(args);
+    const { flags } = sanitizeFields(args, FACT_TEXT_FIELDS);
     const text = [args.category, args.content, args.tags].filter(Boolean).join(' ');
     generateEmbedding(text).then(emb => storeEmbedding('fact', id, emb)).catch(() => {});
     logAudit('add_fact', `local write complete for fact ${id}`);
@@ -532,7 +545,7 @@ server.tool(
     return {
       content: [{
         type: 'text',
-        text: `Fact stored [${source}] (local id: ${id}) [${scope}]\nCategory: ${args.category}\n${args.content}`,
+        text: `Fact stored [${source}] (local id: ${id}) [${scope}]\nCategory: ${args.category}\n${args.content}${injectionNote(flags)}`,
       }],
     };
   })

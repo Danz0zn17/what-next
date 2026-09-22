@@ -11,6 +11,7 @@
  *   POST /fact                  → Store a fact (JSON body)
  *   GET  /search?q=...          → FTS keyword search memories
  *   GET  /hybrid-search?q=...   → FTS + semantic hybrid search (RRF)
+ *   GET  /flagged               → Stored memory that tripped the injection check
  *   POST /semantic-search       → Vector/semantic search memories
  *   GET  /whats-next            → Open next_steps across all projects
  *   GET  /sync/status           → Cloud sync health
@@ -24,7 +25,7 @@
 import { createServer } from 'http';
 import { parseTimeRange } from './timeparse.js';
 import { setSessionCloudId, setFactCloudId } from './db.js';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun, getFlaggedMemories } from './db.js';
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { runCuration } from './curator.js';
@@ -705,6 +706,17 @@ export function startApiServer() {
       if (method === 'GET' && url.pathname === '/curate/status') {
         const last = getLastCurationRun();
         return send(res, 200, last ?? { ran_at: null, message: 'No curation run yet' });
+      }
+
+      // GET /flagged - stored memory whose text tripped the injection check.
+      // Nothing here is hidden from search or the cards; this is the review list.
+      if (method === 'GET' && url.pathname === '/flagged') {
+        const limit = Number(url.searchParams.get('limit')) || 50;
+        const flagged = getFlaggedMemories(limit);
+        return send(res, 200, {
+          counts: { sessions: flagged.sessions.length, facts: flagged.facts.length },
+          ...flagged,
+        });
       }
 
       // POST /semantic-search — vector similarity search

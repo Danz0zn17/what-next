@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- **Stored-memory injection defence**: everything What Next replays into a later session's system
+  context (the brief, the project card, `context.md`, the `AGENTS.md` pointer) is now sanitised on
+  the way in and escaped again on the way out. Harness markup that can impersonate the harness
+  itself (`<system-reminder>`, tool-call tags, chat-template delimiters) is escaped; override-shaped
+  phrasing is flagged and left byte-identical, because memory about prompt injection is legitimate
+  memory. Nothing is ever dropped. The sanitiser sits in `src/db.js`, the one seam every writer
+  shares, so the MCP tools, the REST API, the ChatGPT import and the cloud sync pull are all covered.
+  Cloud rows are sanitised before the dedupe lookup, so sync still recognises its own echoes.
+- **Injection flags and review list**: sessions, facts and project intelligence carry an
+  `injection_flags` column recording which patterns their text tripped. `dump_session` and `add_fact`
+  say so in their response when a write trips one, and `GET /flagged` lists every flagged row. A
+  guarded one-off backfill flags rows written before the sanitiser existed; it writes flags only and
+  never rewrites stored text.
+
 ### Added
 - **Session brief for progressive disclosure**: `~/.whatnext/brief.md` (global lessons plus one
   pointer line, under 1 KB, byte-stable header) is written alongside `context.md`. Inject it with the

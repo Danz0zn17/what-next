@@ -403,6 +403,7 @@ curl "http://localhost:3747/whats-next"
 curl "http://localhost:3747/hybrid-search?q=auth+bug"
 curl "http://localhost:3747/sync/status"
 curl "http://localhost:3747/curate/status"
+curl "http://localhost:3747/flagged"
 ```
 
 If the local service is down:
@@ -437,6 +438,13 @@ curl -H "x-api-key: your_key" https://what-next-production.up.railway.app/stats
 What Next stores **only what your AI explicitly saves**: session summaries, facts, and any feedback you choose to send via the `send_feedback` tool. No passive telemetry, no error snooping, no tracking of any kind.
 
 All data is isolated to your API key and stored in a private Postgres database on Railway. To request a full delete, email support@greenberries.co.za.
+
+**Stored memory is treated as data, not instructions.** What Next replays your past sessions into a
+later session's context, so anything a session saved can reach a future prompt. Every write is
+sanitised first: markup that could impersonate the agent harness is escaped, and instruction-shaped
+phrasing is flagged and left exactly as written. Nothing is ever dropped or silently edited. The
+files What Next generates say in one line that their contents are recalled data. `GET /flagged`
+lists any stored memory that tripped the check, so you can see what is in your own memory and why.
 
 ---
 

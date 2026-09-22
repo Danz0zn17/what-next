@@ -22,6 +22,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectIntelligence, getRecentSessions, getWhatsNext, getAllFacts, listProjects, getRecentCommits, getHotFiles } from './db.js';
+import { neutralize, DATA_NOTICE } from './sanitize.js';
 
 const HOME = homedir();
 const AGENTS_DIR = join(HOME, '.whatnext', 'agents');
@@ -44,9 +45,17 @@ function formatDate(iso) {
   return iso ? iso.split('T')[0] : 'unknown';
 }
 
+// Every string that leaves the DB for one of these files is replayed into a
+// future system prompt, so it is escaped on the way out as well as on the way
+// in. Rows stored before the sanitiser existed have only this pass.
+function clean(v) {
+  return v == null ? '' : neutralize(String(v)).text;
+}
+
 function truncate(str, n) {
   if (!str) return '';
-  return str.length > n ? str.slice(0, n - 3) + '...' : str;
+  const s = clean(str);
+  return s.length > n ? s.slice(0, n - 3) + '...' : s;
 }
 
 export function writeSidecarForProject(projectName) {
@@ -62,7 +71,9 @@ export function writeSidecarForProject(projectName) {
     const hotFiles = getHotFiles(projectName);
 
     const lines = [];
-    lines.push(`# ${projectName} | What Next Context`);
+    lines.push(`# ${clean(projectName)} | What Next Context`);
+    lines.push('');
+    lines.push(DATA_NOTICE);
     lines.push('');
 
     if (lessons.length > 0) {
@@ -73,27 +84,27 @@ export function writeSidecarForProject(projectName) {
 
     if (intel) {
       lines.push('## Project Map');
-      if (safe(intel.repo_path)) lines.push(`**Repo:** ${intel.repo_path}`);
-      if (safe(intel.stack)) lines.push(`**Stack:** ${intel.stack}`);
-      if (safe(intel.deployment)) lines.push(`**Deployment:** ${intel.deployment}`);
-      if (safe(intel.env_vars)) lines.push(`**Env vars (keys only):** ${intel.env_vars}`);
+      if (safe(intel.repo_path)) lines.push(`**Repo:** ${clean(intel.repo_path)}`);
+      if (safe(intel.stack)) lines.push(`**Stack:** ${clean(intel.stack)}`);
+      if (safe(intel.deployment)) lines.push(`**Deployment:** ${clean(intel.deployment)}`);
+      if (safe(intel.env_vars)) lines.push(`**Env vars (keys only):** ${clean(intel.env_vars)}`);
       lines.push('');
 
       if (safe(intel.key_dirs)) {
         lines.push('## Where Things Live');
-        lines.push(intel.key_dirs);
+        lines.push(clean(intel.key_dirs));
         lines.push('');
       }
 
       if (safe(intel.conventions)) {
         lines.push('## Conventions & Patterns');
-        lines.push(intel.conventions);
+        lines.push(clean(intel.conventions));
         lines.push('');
       }
 
       if (safe(intel.extra)) {
         lines.push('## Key Decisions');
-        lines.push(intel.extra);
+        lines.push(clean(intel.extra));
         lines.push('');
       }
     }
@@ -109,7 +120,7 @@ export function writeSidecarForProject(projectName) {
     // Hot files: derived from commit history, no one has to write it.
     if (hotFiles.length > 0) {
       lines.push('## Hot Files (last 30 days)');
-      for (const h of hotFiles) lines.push(`- ${h.file} (${h.commits} commit${h.commits === 1 ? '' : 's'})`);
+      for (const h of hotFiles) lines.push(`- ${clean(h.file)} (${h.commits} commit${h.commits === 1 ? '' : 's'})`);
       lines.push('');
     }
 
@@ -129,14 +140,14 @@ export function writeSidecarForProject(projectName) {
 
     if (whatsNext?.next_steps) {
       lines.push('## Open Tasks');
-      lines.push(whatsNext.next_steps);
+      lines.push(clean(whatsNext.next_steps));
       lines.push('');
     }
 
     if (commits.length > 0) {
       lines.push('## Recent Commits');
       for (const c of commits) {
-        const hash = c.commit_hash.slice(0, 7);
+        const hash = clean(c.commit_hash).slice(0, 7);
         lines.push(`- \`${hash}\` ${truncate(c.message, 80)}`);
       }
       lines.push('');
@@ -236,6 +247,8 @@ export function writeGlobalContext() {
     const lines = [];
     lines.push('# What Next | Global Context');
     lines.push('');
+    lines.push(DATA_NOTICE);
+    lines.push('');
     lines.push('At the start of each session, read the project-specific context file:');
     lines.push('`~/.whatnext/agents/{project-name}.md`');
     lines.push('');
@@ -246,7 +259,7 @@ export function writeGlobalContext() {
       lines.push('|---------|-------------|');
       for (const p of projects) {
         const last = formatDate(p.last_session);
-        lines.push(`| ${p.name} | ${last} |`);
+        lines.push(`| ${clean(p.name)} | ${last} |`);
       }
       lines.push('');
     }
@@ -254,7 +267,7 @@ export function writeGlobalContext() {
     if (recentSessions.length > 0) {
       lines.push('## Recent Work');
       for (const s of recentSessions) {
-        lines.push(`**[${s.project_name}]** ${formatDate(s.session_date)}: ${truncate(s.summary, 200)}`);
+        lines.push(`**[${clean(s.project_name)}]** ${formatDate(s.session_date)}: ${truncate(s.summary, 200)}`);
         if (s.next_steps) lines.push(`- Open: ${truncate(s.next_steps, 150)}`);
       }
       lines.push('');
@@ -270,7 +283,7 @@ export function writeGlobalContext() {
     if (globalFacts.length > 0) {
       lines.push('## Global Facts & Preferences');
       for (const f of globalFacts.filter(f => f.category !== 'lesson')) {
-        lines.push(`- **${f.category}:** ${truncate(f.content, 200)}`);
+        lines.push(`- **${clean(f.category)}:** ${truncate(f.content, 200)}`);
       }
       lines.push('');
     }
@@ -292,7 +305,7 @@ export function writeGlobalContext() {
 // call away. Header is byte-stable; no date.
 function writeSessionBrief(lessons) {
   try {
-    const lines = ['# What Next | Session Brief', ''];
+    const lines = ['# What Next | Session Brief', '', DATA_NOTICE, ''];
     if (lessons.length > 0) {
       lines.push('## Lessons (do not repeat these mistakes)');
       for (const f of lessons.slice(0, 5)) lines.push(`- ${truncate(f.content, 200)}`);
