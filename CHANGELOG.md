@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Time-scoped search**: `search_memories`, `semantic_search` and `GET /search` understand time
+  phrases ("last week", "in August", "2026-08-13", "3 days ago", "since 2026-07-01"). The phrase sets
+  a date window first; exact FTS5 matches inside it rank ahead of embedding matches. A bare time
+  phrase lists that window chronologically.
 - **Lessons never get archived, and surface first**: facts with category `lesson` are excluded from
   the curator's auto-archive band (review only) and rendered at the top of every context card and the
   global brief under "Lessons (do not repeat these mistakes)".

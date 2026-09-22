@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince } from './db.js';
+import { parseTimeRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
 import { runCuration } from './curator.js';
@@ -344,7 +345,16 @@ server.tool(
     let results;
     let source = 'cloud';
 
-    if (cloud.isEnabled()) {
+    // Time phrases ("last week", "in August") narrow the window first, then
+    // rank text inside it. Cloud search has no date filter, so stay local.
+    const range = parseTimeRange(query);
+    if (range) {
+      results = searchMemories(range.text, limit, range);
+      source = `local, ${range.label}`;
+      query = range.text || query;
+    }
+
+    if (!results && cloud.isEnabled()) {
       try {
         results = await cloud.search(query);
         // Cloud returns { sessions, facts }
@@ -527,6 +537,50 @@ server.tool(
     limit: z.number().optional().default(5).describe('Max results to return'),
   },
   withTimeout('semantic_search', async ({ query, limit }) => {
+    // With a time phrase: exact FTS matches inside the window come first,
+    // embeddings (filtered to the same window) only fill what is left.
+    const range = parseTimeRange(query);
+    if (range) {
+      const exact = searchMemories(range.text, limit, range);
+      const lines = [`Semantic search: "${range.text || query}" [local, ${range.label}]\n`];
+      const seen = new Set();
+      for (const r of exact.sessions) {
+        seen.add(`session:${r.id}`);
+        lines.push(`**[${r.project_name}]** ${String(r.session_date).split('T')[0]} (exact)`);
+        lines.push(r.summary);
+        if (r.next_steps) lines.push(`Next: ${r.next_steps}`);
+        lines.push('');
+      }
+      for (const f of exact.facts) {
+        seen.add(`fact:${f.id}`);
+        lines.push(`**[${f.project_name ?? 'global'}]** ${String(f.created_at).split('T')[0]} (exact)`);
+        lines.push(`${f.category}: ${f.content}`);
+        lines.push('');
+      }
+      let remaining = limit - exact.sessions.length - exact.facts.length;
+      if (remaining > 0 && range.text) {
+        const queryEmbedding = await generateEmbedding(range.text);
+        const ranked = getAllEmbeddings()
+          .map(e => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
+          .sort((a, b) => b.score - a.score);
+        for (const m of ranked) {
+          if (remaining <= 0) break;
+          if (m.score < 0.3) break;
+          if (seen.has(`${m.rowtype}:${m.row_id}`)) continue;
+          const rec = m.rowtype === 'session' ? getSessionById(m.row_id) : getFactById(m.row_id);
+          if (!rec) continue;
+          const when = String(m.rowtype === 'session' ? rec.session_date : rec.created_at);
+          if (when < range.since || when >= range.until) continue;
+          lines.push(`**[${rec.project_name ?? 'global'}]** ${when.split('T')[0]} (score: ${m.score.toFixed(2)})`);
+          lines.push(m.rowtype === 'session' ? rec.summary : `${rec.category}: ${rec.content}`);
+          lines.push('');
+          remaining--;
+        }
+      }
+      if (lines.length === 1) lines.push(`Nothing found between ${range.label}.`);
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+
     // Try cloud semantic search first
     if (cloud.isEnabled()) {
       try {

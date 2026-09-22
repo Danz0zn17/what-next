@@ -22,6 +22,7 @@
  */
 
 import { createServer } from 'http';
+import { parseTimeRange } from './timeparse.js';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun } from './db.js';
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
@@ -634,6 +635,8 @@ export function startApiServer() {
         const q = url.searchParams.get('q');
         if (!q) return send(res, 400, { error: 'q parameter required' });
         const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
+        const range = parseTimeRange(q);
+        if (range) return send(res, 200, { ...searchMemories(range.text, limit, range), range: { since: range.since, until: range.until } });
         return send(res, 200, searchMemories(q, limit));
       }
 

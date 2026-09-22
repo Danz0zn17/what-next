@@ -228,8 +228,8 @@ This drops the skill into `.agents/skills/what_next/` (symlinked for Claude Code
 | `dump_session` | Save a summary of the current session - what was built, decisions made, next steps. Triggers a Smart Context Card update automatically. |
 | `update_project_intelligence` | Save structural knowledge about a project (stack, key dirs, conventions, env vars, deployment). Future sessions skip exploration entirely. |
 | `whats_next` | See the most recent open `next_steps` across all your projects - your instant to-do list. |
-| `search_memories` | Full-text keyword search across all sessions and facts. |
-| `semantic_search` | Embedding-based search - finds related context even without exact keyword matches. |
+| `search_memories` | Full-text keyword search across all sessions and facts. Understands time phrases: "auth decisions in August", "surf-rides last week", "since 2026-07-01". |
+| `semantic_search` | Embedding-based search - finds related context even without exact keyword matches. With a time phrase, exact matches inside that window rank first and embeddings fill the rest. |
 | `get_project` | Load full history for a project - all prior sessions in one call. |
 | `list_projects` | See all known projects with session counts and last activity. |
 | `add_fact` | Store a persistent fact (preference, config, decision) not tied to a session. |

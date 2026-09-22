@@ -265,27 +265,61 @@ export function getAllFacts() {
   `).all();
 }
 
-export function searchMemories(query, limit = 10) {
+// Optional { since, until } (ISO, half-open) restricts by session_date /
+// fact created_at before ranking. An empty query with a range lists that
+// window chronologically instead of matching text.
+// FTS5 treats "-", ":" and similar as operators, so "surf-rides" errors with
+// "no such column". Quote every term; terms are ANDed as before.
+function ftsQuery(query) {
+  return query.trim().split(/\s+/).map(t => '"' + t.replace(/"/g, '""') + '"').join(' ');
+}
+
+// Dates are stored both as "2026-09-21 13:41:56" (SQLite) and
+// "2026-09-21T13:41:56.000Z" (cloud sync); normalise both sides to the
+// first form before comparing.
+const sqlDate = iso => String(iso).slice(0, 19).replace('T', ' ');
+
+export function searchMemories(query, limit = 10, { since, until } = {}) {
+  const empty = !query.trim();
+  query = ftsQuery(query);
+  const ranged = since || until;
+  const range = (col) => ranged ? ` AND replace(substr(${col}, 1, 19), 'T', ' ') >= ? AND replace(substr(${col}, 1, 19), 'T', ' ') < ?` : '';
+  const rangeArgs = ranged ? [since ? sqlDate(since) : '0000', until ? sqlDate(until) : '9999'] : [];
+
+  if (empty && ranged) {
+    const sessions = db.prepare(`
+      SELECT s.*, p.name as project_name FROM sessions s
+      JOIN projects p ON p.id = s.project_id
+      WHERE 1=1${range('s.session_date')} ORDER BY s.session_date DESC LIMIT ?
+    `).all(...rangeArgs, limit);
+    const facts = db.prepare(`
+      SELECT f.*, p.name as project_name FROM facts f
+      LEFT JOIN projects p ON p.id = f.project_id
+      WHERE f.status = 'active'${range('f.created_at')} ORDER BY f.created_at DESC LIMIT ?
+    `).all(...rangeArgs, limit);
+    return { sessions, facts };
+  }
+
   const sessionResults = db.prepare(`
     SELECT s.*, p.name as project_name,
            highlight(sessions_fts, 0, '[', ']') as matched_summary
     FROM sessions_fts
     JOIN sessions s ON s.id = sessions_fts.rowid
     JOIN projects p ON p.id = s.project_id
-    WHERE sessions_fts MATCH ?
+    WHERE sessions_fts MATCH ?${range('s.session_date')}
     ORDER BY rank
     LIMIT ?
-  `).all(query, limit);
+  `).all(query, ...rangeArgs, limit);
 
   const factResults = db.prepare(`
     SELECT f.*, p.name as project_name
     FROM facts_fts
     JOIN facts f ON f.id = facts_fts.rowid
     LEFT JOIN projects p ON p.id = f.project_id
-    WHERE facts_fts MATCH ? AND f.status = 'active'
+    WHERE facts_fts MATCH ? AND f.status = 'active'${range('f.created_at')}
     ORDER BY rank
     LIMIT ?
-  `).all(query, limit);
+  `).all(query, ...rangeArgs, limit);
 
   return { sessions: sessionResults, facts: factResults };
 }
