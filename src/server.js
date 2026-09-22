@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
 import { parseTimeRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { generateEmbedding, cosineSimilarity } from './embeddings.js';
@@ -52,7 +52,8 @@ function syncSessionInBackground(args, localId) {
   if (!cloud.isEnabled()) return;
   setImmediate(async () => {
     try {
-      await cloud.postSession(args);
+      const res = await cloud.postSession(args);
+      if (res?.id) setSessionCloudId(localId, res.id);
       logAudit('dump_session', `cloud sync ok for local session ${localId}`);
     } catch (err) {
       if (err instanceof CloudUnavailableError) {
@@ -71,7 +72,8 @@ function syncFactInBackground(args, localId) {
   if (!cloud.isEnabled()) return;
   setImmediate(async () => {
     try {
-      await cloud.postFact(args);
+      const res = await cloud.postFact(args);
+      if (res?.id) setFactCloudId(localId, res.id);
       logAudit('add_fact', `cloud sync ok for local fact ${localId}`);
     } catch (err) {
       if (err instanceof CloudUnavailableError) {

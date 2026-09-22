@@ -37,6 +37,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cards do automatically and permanently.
 
 ### Fixed
+- **Duplicate sessions from cloud sync**: a session dumped locally was echoed back by the cloud
+  with its cloud id and inserted a second time, because the local row had no cloud id yet. Now
+  the cloud id is written back to the local row after a successful push, the pull path adopts the
+  id when it finds the same session by content, and a one-off startup cleanup removes echoes
+  already stored (keeping the oldest row and its cloud id, and dropping their FTS rows and
+  embeddings). Sync log now reports new rows only.
 - Skill card `homepage` corrected to `whatnextai.co.za` (was a non-existent domain).
 
 ---

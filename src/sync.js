@@ -12,7 +12,7 @@
  */
 
 import * as cloud from './cloud-client.js';
-import { getLastCloudSync, setLastCloudSync, upsertSessionFromCloud, upsertFactFromCloud, storeEmbedding, getAllEmbeddings } from './db.js';
+import { getLastCloudSync, setLastCloudSync, upsertSessionFromCloud, upsertFactFromCloud, storeEmbedding, getAllEmbeddings, dedupeCloudEchoes } from './db.js';
 
 // Embeddings require native onnxruntime binaries and can be slow/dataless on
 // macOS boot. Keep sync available and load embeddings only after the API starts.
@@ -58,8 +58,10 @@ export async function syncFromCloud() {
     );
     const generateEmbedding = await getGenerateEmbedding();
 
+    let inserted = 0;
     for (const session of sessions) {
       const localId = upsertSessionFromCloud(session);
+      if (localId) inserted++;
       if (generateEmbedding && localId && !existingEmbeddings.has(`session:${localId}`)) {
         const text = [session.summary, session.what_was_built, session.decisions, session.next_steps, session.tags].filter(Boolean).join(' ');
         generateEmbedding(text).then(emb => storeEmbedding('session', localId, emb)).catch(() => {});
@@ -67,6 +69,7 @@ export async function syncFromCloud() {
     }
     for (const fact of facts) {
       const localId = upsertFactFromCloud(fact);
+      if (localId) inserted++;
       if (generateEmbedding && localId && !existingEmbeddings.has(`fact:${localId}`)) {
         const text = [fact.category, fact.content, fact.tags].filter(Boolean).join(' ');
         generateEmbedding(text).then(emb => storeEmbedding('fact', localId, emb)).catch(() => {});
@@ -75,9 +78,8 @@ export async function syncFromCloud() {
 
     setLastCloudSync(now);
 
-    const total = sessions.length + facts.length;
-    if (total > 0) {
-      process.stderr.write(`[sync] Pulled ${sessions.length} session(s) + ${facts.length} fact(s) from cloud\n`);
+    if (inserted > 0) {
+      process.stderr.write(`[sync] Pulled ${inserted} new row(s) from cloud (${sessions.length + facts.length} returned)\n`);
     }
   } catch (err) {
     process.stderr.write(`[sync] Error: ${err.message}\n`);
@@ -85,6 +87,12 @@ export async function syncFromCloud() {
 }
 
 export function startPeriodicSync() {
+  try {
+    const r = dedupeCloudEchoes();
+    if (!r.skipped) process.stderr.write(`[sync] One-off cleanup: removed ${r.sessions_removed} duplicate session(s), ${r.facts_removed} duplicate fact(s)\n`);
+  } catch (err) {
+    process.stderr.write(`[sync] Cleanup failed: ${err.message}\n`);
+  }
   // Initial sync shortly after startup (give server a moment to bind)
   setTimeout(() => syncFromCloud().catch(() => {}), 4_000);
   // Then every 5 minutes

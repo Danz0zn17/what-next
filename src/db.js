@@ -119,6 +119,59 @@ try { db.exec('ALTER TABLE facts    ADD COLUMN cloud_id TEXT'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_cloud_id ON sessions(cloud_id) WHERE cloud_id IS NOT NULL'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_cloud_id    ON facts(cloud_id)    WHERE cloud_id IS NOT NULL'); } catch {}
 
+// One-off cleanup (v2.2.0): remove sessions/facts that are exact echoes of a
+// row already present (same project + text), keeping the oldest row and its
+// cloud id. FTS rows and embeddings of removed rows are dropped too.
+export function dedupeCloudEchoes() {
+  const done = db.prepare("SELECT value FROM sync_state WHERE key = 'dedupe_echoes_v1'").get();
+  if (done) return { sessions_removed: 0, facts_removed: 0, skipped: true };
+
+  const run = db.transaction(() => {
+    const sessionGroups = db.prepare(`
+      SELECT project_id, summary, COUNT(*) AS n FROM sessions GROUP BY project_id, summary HAVING n > 1
+    `).all();
+    let sessionsRemoved = 0;
+    for (const g of sessionGroups) {
+      const rows = db.prepare(`
+        SELECT id, summary, what_was_built, decisions, stack, next_steps, tags FROM sessions
+        WHERE project_id = ? AND summary = ? ORDER BY (cloud_id IS NULL) ASC, id ASC
+      `).all(g.project_id, g.summary);
+      for (const r of rows.slice(1)) {
+        db.prepare(`INSERT INTO sessions_fts(sessions_fts, rowid, summary, what_was_built, decisions, stack, next_steps, tags)
+                    VALUES('delete', ?, ?, ?, ?, ?, ?, ?)`)
+          .run(r.id, r.summary, r.what_was_built ?? '', r.decisions ?? '', r.stack ?? '', r.next_steps ?? '', r.tags ?? '');
+        db.prepare("DELETE FROM embeddings WHERE rowtype = 'session' AND row_id = ?").run(r.id);
+        db.prepare('DELETE FROM sessions WHERE id = ?').run(r.id);
+        sessionsRemoved++;
+      }
+    }
+
+    const factGroups = db.prepare(`
+      SELECT project_id, category, content, COUNT(*) AS n FROM facts GROUP BY project_id, category, content HAVING n > 1
+    `).all();
+    let factsRemoved = 0;
+    for (const g of factGroups) {
+      const rows = db.prepare(`
+        SELECT id, category, content, tags FROM facts WHERE project_id IS ? AND category = ? AND content = ?
+        ORDER BY (status = 'active') DESC, (cloud_id IS NULL) ASC, id ASC
+      `).all(g.project_id, g.category, g.content);
+      const keep = rows[0].id;
+      for (const r of rows.slice(1)) {
+        db.prepare("INSERT INTO facts_fts(facts_fts, rowid, category, content, tags) VALUES('delete', ?, ?, ?, ?)")
+          .run(r.id, r.category, r.content, r.tags ?? '');
+        db.prepare("DELETE FROM embeddings WHERE rowtype = 'fact' AND row_id = ?").run(r.id);
+        db.prepare('UPDATE facts SET superseded_by = ? WHERE superseded_by = ?').run(keep, r.id);
+        db.prepare('DELETE FROM facts WHERE id = ?').run(r.id);
+        factsRemoved++;
+      }
+    }
+
+    db.prepare("INSERT OR REPLACE INTO sync_state (key, value) VALUES ('dedupe_echoes_v1', ?)").run(new Date().toISOString());
+    return { sessions_removed: sessionsRemoved, facts_removed: factsRemoved, skipped: false };
+  });
+  return run();
+}
+
 // Migrations: memory curator (v2.1.0) — fact archival + run history (safe to run on existing DBs)
 try { db.exec("ALTER TABLE facts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"); } catch {}
 // Link commits to the Claude Code session that produced them (Claude-Session trailer)
@@ -498,6 +551,18 @@ export function setLastCloudSync(iso) {
 }
 
 // --- Cloud sync upserts (idempotent — skips if cloud_id already exists locally) ---
+// Record the cloud id on a row that was written locally first, so the next
+// pull recognises the echo instead of inserting a duplicate.
+export function setSessionCloudId(localId, cloudId) {
+  if (!localId || !cloudId) return;
+  db.prepare('UPDATE sessions SET cloud_id = ? WHERE id = ? AND cloud_id IS NULL').run(String(cloudId), localId);
+}
+
+export function setFactCloudId(localId, cloudId) {
+  if (!localId || !cloudId) return;
+  db.prepare('UPDATE facts SET cloud_id = ? WHERE id = ? AND cloud_id IS NULL').run(String(cloudId), localId);
+}
+
 export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_was_built, decisions, stack, next_steps, tags, session_date }) {
   if (!project_name || !summary) return null;
   if (cloud_id) {
@@ -505,6 +570,16 @@ export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_w
     if (exists) return null;
   }
   const projectId = upsertProject(project_name);
+  // Same session already stored locally (written here, then echoed back by
+  // the cloud): adopt the cloud id rather than inserting again.
+  const twin = db.prepare(`
+    SELECT id, cloud_id FROM sessions WHERE project_id = ? AND summary = ?
+    ORDER BY (cloud_id IS NULL) DESC, id ASC LIMIT 1
+  `).get(projectId, summary);
+  if (twin) {
+    if (cloud_id && !twin.cloud_id) setSessionCloudId(twin.id, cloud_id);
+    return null;
+  }
   const result = db.prepare(`
     INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -519,6 +594,14 @@ export function upsertFactFromCloud({ cloud_id, project_name, category, content,
     if (exists) return null;
   }
   const projectId = project_name ? upsertProject(project_name) : null;
+  const twin = db.prepare(`
+    SELECT id, cloud_id FROM facts WHERE project_id IS ? AND category = ? AND content = ?
+    ORDER BY (cloud_id IS NULL) DESC, id ASC LIMIT 1
+  `).get(projectId, category, content);
+  if (twin) {
+    if (cloud_id && !twin.cloud_id) setFactCloudId(twin.id, cloud_id);
+    return null;
+  }
   const result = db.prepare(`
     INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id)
     VALUES (?, ?, ?, ?, ?, ?)

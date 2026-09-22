@@ -23,6 +23,7 @@
 
 import { createServer } from 'http';
 import { parseTimeRange } from './timeparse.js';
+import { setSessionCloudId, setFactCloudId } from './db.js';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun } from './db.js';
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
@@ -602,7 +603,7 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.project || !body.summary) return send(res, 400, { error: 'project and summary are required' });
         const id = addSession(body);
-        if (cloud.isEnabled()) cloud.postSession(body).catch(() => {});
+        if (cloud.isEnabled()) cloud.postSession(body).then(r => { if (r?.id) setSessionCloudId(id, r.id); }).catch(() => {});
         setImmediate(() => {
           try { writeSidecarForProject(body.project); } catch {}
           try { writeGlobalContext(); } catch {}
@@ -625,8 +626,8 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.category || !body.content) return send(res, 400, { error: 'category and content are required' });
         const id = addFact(body);
-        // Write-through to cloud (fire and forget)
-        if (cloud.isEnabled()) cloud.postFact(body).catch(() => {});
+        // Write-through to cloud (fire and forget), recording the cloud id on success
+        if (cloud.isEnabled()) cloud.postFact(body).then(r => { if (r?.id) setFactCloudId(id, r.id); }).catch(() => {});
         return send(res, 201, { id, message: 'Fact stored' });
       }
 
