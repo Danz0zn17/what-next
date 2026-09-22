@@ -19,6 +19,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Card size warning**: the sidecar logs a warning when a card exceeds ~12 KB (~3k tokens).
 - **Tool schema footprint** documented in README (about 6.2 KB / ~1,600 tokens for 14 tools).
 
+### Security
+- sharp override bumped to 0.35.4 (libheif advisories GHSA-rgj7-g3m4-5g8c) and qs patched via audit fix - CI audit gate green again.
+
 ### Changed
 - **Prompt-cache friendly cards**: the `_Updated <date>_` line moved from the card header to the footer,
   so the injected prefix is byte-stable day to day.
