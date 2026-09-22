@@ -82,7 +82,10 @@ export function findDuplicatePairs(facts, embeddingById, {
       if (!eb) continue;
 
       const similarity = Number(cosine(ea, eb).toFixed(4));
-      if (similarity >= autoThreshold) {
+      // A "lesson" is a fixed mistake; losing one is worse than a duplicate, so
+      // lesson pairs only ever go to the review band.
+      const protectedPair = a.category === 'lesson' || b.category === 'lesson';
+      if (similarity >= autoThreshold && !protectedPair) {
         slated.add(a.id);
         auto.push({
           archived_id: a.id,

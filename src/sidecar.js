@@ -8,6 +8,11 @@
  *   ~/.whatnext/agents/{project}.md  — per-project orientation card
  *   ~/.whatnext/context.md           — global pointer + cross-project brief
  *   ~/.copilot/copilot-instructions.md — Copilot session-start instructions
+ *   {repo}/AGENTS.md                  - pointer block (only when AGENTS.md exists
+ *                                        or the repo has neither AGENTS.md nor CLAUDE.md)
+ *
+ * The card header is byte-stable between writes (the updated date lives in the
+ * footer) so a hook that injects it does not break prompt caching every day.
  */
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
@@ -20,6 +25,7 @@ const AGENTS_DIR = join(HOME, '.whatnext', 'agents');
 const CONTEXT_FILE = join(HOME, '.whatnext', 'context.md');
 const COPILOT_DIR = join(HOME, '.copilot');
 const COPILOT_INSTRUCTIONS = join(COPILOT_DIR, 'copilot-instructions.md');
+const CARD_WARN_CHARS = 12_000; // ~3k tokens - beyond this the card stops being "zero-cost"
 
 function ensureDirs() {
   mkdirSync(AGENTS_DIR, { recursive: true });
@@ -46,11 +52,17 @@ export function writeSidecarForProject(projectName) {
     const sessions = getRecentSessions(20).filter(s => s.project_name === projectName).slice(0, 3);
     const commits = getRecentCommits(projectName, 5);
     const whatsNext = getWhatsNext(20).find(i => i.project_name === projectName);
+    const lessons = getAllFacts().filter(f => f.project_name === projectName && f.category === 'lesson').slice(0, 8);
 
     const lines = [];
     lines.push(`# ${projectName} | What Next Context`);
-    lines.push(`_Updated ${new Date().toISOString().split('T')[0]}_`);
     lines.push('');
+
+    if (lessons.length > 0) {
+      lines.push('## Lessons (do not repeat these mistakes)');
+      for (const f of lessons) lines.push(`- ${truncate(f.content, 240)}`);
+      lines.push('');
+    }
 
     if (intel) {
       lines.push('## Project Map');
@@ -109,14 +121,19 @@ export function writeSidecarForProject(projectName) {
     }
 
     lines.push('---');
-    lines.push('_This file is auto-maintained by What Next. Do not edit manually._');
+    lines.push(`_Updated ${new Date().toISOString().split('T')[0]}. This file is auto-maintained by What Next. Do not edit manually._`);
 
     const filePath = join(AGENTS_DIR, `${projectName}.md`);
-    writeFileSync(filePath, lines.join('\n'), 'utf8');
+    const content = lines.join('\n');
+    writeFileSync(filePath, content, 'utf8');
+    if (content.length > CARD_WARN_CHARS) {
+      process.stderr.write(`[sidecar] ${projectName} card is ${content.length} chars (~${Math.round(content.length / 4)} tokens) - trim project intelligence to keep orientation cheap\n`);
+    }
 
-    // Auto-write .cursorrules if the repo is known and Cursor is detected
+    // Auto-write .cursorrules / AGENTS.md pointer if the repo is known
     if (intel?.repo_path) {
       writeCursorRules(projectName, intel.repo_path, filePath);
+      writeAgentsMd(projectName, intel.repo_path, filePath);
     }
   } catch (err) {
     process.stderr.write(`[sidecar] Failed to write sidecar for ${projectName}: ${err.message}\n`);
@@ -155,6 +172,38 @@ function writeCursorRules(projectName, repoPath, cardPath) {
   }
 }
 
+// Claude Code reads AGENTS.md when there is no CLAUDE.md; Codex and Copilot read
+// it always. One managed block points all of them at the card.
+function writeAgentsMd(projectName, repoPath, cardPath) {
+  try {
+    const agentsPath = join(repoPath, 'AGENTS.md');
+    const hasAgents = existsSync(agentsPath);
+    if (!hasAgents && existsSync(join(repoPath, 'CLAUDE.md'))) return;
+    if (!hasAgents && !existsSync(join(repoPath, '.git'))) return;
+
+    const marker = '<!-- What Next: auto-managed block - do not edit below this line -->';
+    const block = [
+      marker,
+      '## Orientation (What Next)',
+      `Read \`${cardPath}\` at the start of every session. It holds the stack, key dirs,`,
+      `conventions, recent work and open tasks for ${projectName}, updated on every session dump and commit.`,
+      '',
+    ].join('\n');
+
+    if (hasAgents) {
+      const existing = readFileSync(agentsPath, 'utf8');
+      const markerIdx = existing.indexOf(marker);
+      const base = markerIdx >= 0 ? existing.slice(0, markerIdx).trimEnd() : existing.trimEnd();
+      const next = base ? `${base}\n\n${block}` : block;
+      if (next !== existing) writeFileSync(agentsPath, next, 'utf8');
+    } else {
+      writeFileSync(agentsPath, `# ${projectName}\n\n${block}`, 'utf8');
+    }
+  } catch {
+    // best-effort, never throw
+  }
+}
+
 export function writeGlobalContext() {
   try {
     ensureDirs();
@@ -164,7 +213,6 @@ export function writeGlobalContext() {
 
     const lines = [];
     lines.push('# What Next | Global Context');
-    lines.push(`_Updated ${new Date().toISOString().split('T')[0]}_`);
     lines.push('');
     lines.push('At the start of each session, read the project-specific context file:');
     lines.push('`~/.whatnext/agents/{project-name}.md`');
@@ -190,16 +238,23 @@ export function writeGlobalContext() {
       lines.push('');
     }
 
+    const lessons = globalFacts.filter(f => f.category === 'lesson');
+    if (lessons.length > 0) {
+      lines.push('## Lessons (do not repeat these mistakes)');
+      for (const f of lessons) lines.push(`- ${truncate(f.content, 200)}`);
+      lines.push('');
+    }
+
     if (globalFacts.length > 0) {
       lines.push('## Global Facts & Preferences');
-      for (const f of globalFacts) {
+      for (const f of globalFacts.filter(f => f.category !== 'lesson')) {
         lines.push(`- **${f.category}:** ${truncate(f.content, 200)}`);
       }
       lines.push('');
     }
 
     lines.push('---');
-    lines.push('_Auto-maintained by What Next. whatnextai.co.za_');
+    lines.push(`_Updated ${new Date().toISOString().split('T')[0]}. Auto-maintained by What Next. whatnextai.co.za_`);
 
     writeFileSync(CONTEXT_FILE, lines.join('\n'), 'utf8');
 

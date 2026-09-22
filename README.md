@@ -236,6 +236,9 @@ This drops the skill into `.agents/skills/what_next/` (symlinked for Claude Code
 | `edit_session` | Update fields on an existing session by local ID. |
 | `curate_memory` | Review stored facts for near-duplicates and archive them non-destructively. Runs daily in the background too - call with `dry_run: true` to preview. |
 
+**Schema footprint:** the full `tools/list` payload for all 14 tools is about 6.2 KB (roughly 1,600 tokens).
+That is what every session pays to have What Next available, before any tool is called.
+
 ---
 
 ## What to Try First

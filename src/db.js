@@ -121,6 +121,8 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_cloud_id    ON facts(cloud_i
 
 // Migrations: memory curator (v2.1.0) — fact archival + run history (safe to run on existing DBs)
 try { db.exec("ALTER TABLE facts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"); } catch {}
+// Link commits to the Claude Code session that produced them (Claude-Session trailer)
+try { db.exec('ALTER TABLE commit_contexts ADD COLUMN session_url TEXT'); } catch {}
 try { db.exec('ALTER TABLE facts ADD COLUMN superseded_by INTEGER'); } catch {}
 db.exec(`
   CREATE TABLE IF NOT EXISTS curation_runs (
@@ -392,13 +394,13 @@ export function getAllProjectIntelligence() {
 }
 
 // --- Commit context helpers ---
-export function addCommitContext({ project, commit_hash, message, changed_files, committed_at }) {
+export function addCommitContext({ project, commit_hash, message, changed_files, committed_at, session_url }) {
   const projectId = upsertProject(project);
   try {
     const result = db.prepare(`
-      INSERT OR IGNORE INTO commit_contexts (project_id, commit_hash, message, changed_files, committed_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(projectId, commit_hash, message, changed_files ?? null, committed_at ?? new Date().toISOString());
+      INSERT OR IGNORE INTO commit_contexts (project_id, commit_hash, message, changed_files, committed_at, session_url)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(projectId, commit_hash, message, changed_files ?? null, committed_at ?? new Date().toISOString(), session_url ?? null);
     return result.lastInsertRowid;
   } catch {
     return null;
@@ -430,7 +432,7 @@ export function getLastSession(projectName) {
 
 export function getCommitsSince(projectName, since) {
   return db.prepare(`
-    SELECT cc.message, cc.committed_at, cc.changed_files
+    SELECT cc.message, cc.committed_at, cc.changed_files, cc.session_url
     FROM commit_contexts cc
     JOIN projects p ON p.id = cc.project_id
     WHERE p.name = ? AND cc.committed_at > ?

@@ -76,6 +76,8 @@ async function poll(state) {
     state[name] = hash;
 
     const message = runGit(path, 'log -1 --format=%s HEAD') ?? '';
+    const body = runGit(path, 'log -1 --format=%b HEAD') ?? '';
+    const sessionUrl = body.match(/Claude-Session:\s*(https?:\/\/\S+)/)?.[1] ?? null;
     const committedAt = runGit(path, 'log -1 --format=%aI HEAD') ?? new Date().toISOString();
     const changedFiles = runGit(path, 'diff-tree --no-commit-id -r --name-only HEAD') ?? '';
 
@@ -85,6 +87,7 @@ async function poll(state) {
       message,
       changed_files: changedFiles,
       committed_at: committedAt,
+      session_url: sessionUrl,
     });
 
     process.stderr.write(`[watcher] New commit in ${name}: ${hash.slice(0, 7)} ${message.slice(0, 60)}\n`);

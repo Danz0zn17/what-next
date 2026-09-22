@@ -8,6 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Lessons never get archived, and surface first**: facts with category `lesson` are excluded from
+  the curator's auto-archive band (review only) and rendered at the top of every context card and the
+  global brief under "Lessons (do not repeat these mistakes)".
+- **AGENTS.md pointer**: the sidecar now writes a managed block into a repo's `AGENTS.md` (when one
+  exists, or when the repo has neither `AGENTS.md` nor `CLAUDE.md`) so Claude Code, Codex and Copilot
+  all find the context card from one file.
+- **Commit to session linking**: the git watcher captures the `Claude-Session:` trailer Claude Code
+  appends to commits and stores it as `session_url` on commit contexts; `since_last_session` shows it.
+- **Card size warning**: the sidecar logs a warning when a card exceeds ~12 KB (~3k tokens).
+- **Tool schema footprint** documented in README (about 6.2 KB / ~1,600 tokens for 14 tools).
+
+### Changed
+- **Prompt-cache friendly cards**: the `_Updated <date>_` line moved from the card header to the footer,
+  so the injected prefix is byte-stable day to day.
 - **Skills-CLI install path documented**: `npx skills@latest add Danz0zn17/what-next` installs the
   What Next skill into any repo (`.agents/skills/what_next/`, symlinked for Claude Code) - agents
   use the local REST API with zero MCP configuration. Verified end-to-end against the live CLI.

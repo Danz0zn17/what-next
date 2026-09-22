@@ -733,7 +733,7 @@ server.tool(
       lines.push(`**${commits.length} commit${commits.length === 1 ? '' : 's'} since then:**`);
       for (const c of commits) {
         const date = String(c.committed_at).split('T')[0];
-        lines.push(`- ${date}: ${c.message}`);
+        lines.push(`- ${date}: ${c.message}${c.session_url ? ` ([session](${c.session_url}))` : ''}`);
         if (c.changed_files) {
           const files = c.changed_files.split('\n').slice(0, 4);
           for (const f of files) lines.push(`  · ${f}`);
