@@ -506,7 +506,7 @@ server.tool(
 server.tool(
   'add_fact',
   {
-    category: z.string().describe('Category e.g. "preference", "pattern", "lesson", "stack-choice"'),
+    category: z.string().describe('Category e.g. "preference", "pattern", "lesson" (a fixed mistake, shown first on cards, never auto-archived), "tour" (a code tour: one feature traced through 5-6 files with function names, checks and change boundary, shown on the project card), "stack-choice"'),
     content: z.string().describe('The fact or insight to remember'),
     project: z.string().optional().describe('Associate with a project, or leave blank for global facts'),
     tags: z.string().optional().describe('Comma-separated tags'),

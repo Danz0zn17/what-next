@@ -232,7 +232,7 @@ This drops the skill into `.agents/skills/what_next/` (symlinked for Claude Code
 | `semantic_search` | Embedding-based search - finds related context even without exact keyword matches. With a time phrase, exact matches inside that window rank first and embeddings fill the rest. |
 | `get_project` | Load full history for a project - all prior sessions in one call. |
 | `list_projects` | See all known projects with session counts and last activity. |
-| `add_fact` | Store a persistent fact (preference, config, decision) not tied to a session. |
+| `add_fact` | Store a persistent fact (preference, config, decision) not tied to a session. Category `lesson` is shown first on every card and never auto-archived; category `tour` (a feature traced through its files) is shown on the project card. |
 | `edit_session` | Update fields on an existing session by local ID. |
 | `curate_memory` | Review stored facts for near-duplicates and archive them non-destructively. Runs daily in the background too - call with `dry_run: true` to preview. |
 

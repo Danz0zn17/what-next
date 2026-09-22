@@ -505,6 +505,32 @@ export function getRecentCommits(projectName, limit = 5) {
   `).all(projectName, limit);
 }
 
+// Files changed most often in the last N days, from the watcher's commit
+// history. Lock files, build output and generated dirs are ignored.
+const HOT_FILE_IGNORE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|dist|build|\.next|node_modules|coverage)(\/|$)/;
+export function getHotFiles(projectName, { days = 30, limit = 8 } = {}) {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const rows = db.prepare(`
+    SELECT cc.changed_files
+    FROM commit_contexts cc
+    JOIN projects p ON p.id = cc.project_id
+    WHERE p.name = ? AND cc.changed_files IS NOT NULL
+      AND replace(substr(cc.committed_at, 1, 19), 'T', ' ') >= ?
+  `).all(projectName, since.slice(0, 19).replace('T', ' '));
+  const counts = new Map();
+  for (const r of rows) {
+    for (const f of r.changed_files.split('\n')) {
+      const file = f.trim();
+      if (!file || HOT_FILE_IGNORE.test(file)) continue;
+      counts.set(file, (counts.get(file) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([file, commits]) => ({ file, commits }));
+}
+
 // --- Since last session: commits + last session date for a project ---
 export function getLastSession(projectName) {
   return db.prepare(`

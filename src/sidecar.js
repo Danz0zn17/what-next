@@ -18,7 +18,7 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getProjectIntelligence, getRecentSessions, getWhatsNext, getAllFacts, listProjects, getRecentCommits } from './db.js';
+import { getProjectIntelligence, getRecentSessions, getWhatsNext, getAllFacts, listProjects, getRecentCommits, getHotFiles } from './db.js';
 
 const HOME = homedir();
 const AGENTS_DIR = join(HOME, '.whatnext', 'agents');
@@ -52,7 +52,10 @@ export function writeSidecarForProject(projectName) {
     const sessions = getRecentSessions(20).filter(s => s.project_name === projectName).slice(0, 3);
     const commits = getRecentCommits(projectName, 5);
     const whatsNext = getWhatsNext(20).find(i => i.project_name === projectName);
-    const lessons = getAllFacts().filter(f => f.project_name === projectName && f.category === 'lesson').slice(0, 8);
+    const projectFacts = getAllFacts().filter(f => f.project_name === projectName);
+    const lessons = projectFacts.filter(f => f.category === 'lesson').slice(0, 8);
+    const tours = projectFacts.filter(f => f.category === 'tour').slice(0, 6);
+    const hotFiles = getHotFiles(projectName);
 
     const lines = [];
     lines.push(`# ${projectName} | What Next Context`);
@@ -89,6 +92,21 @@ export function writeSidecarForProject(projectName) {
         lines.push(intel.extra);
         lines.push('');
       }
+    }
+
+    // Code tours: one fact per feature, tracing the files it flows through.
+    // Written by a session that just did the reading, reused by the next one.
+    if (tours.length > 0) {
+      lines.push('## Code Tours');
+      for (const f of tours) lines.push(`- ${truncate(f.content, 600)}`);
+      lines.push('');
+    }
+
+    // Hot files: derived from commit history, no one has to write it.
+    if (hotFiles.length > 0) {
+      lines.push('## Hot Files (last 30 days)');
+      for (const h of hotFiles) lines.push(`- ${h.file} (${h.commits} commit${h.commits === 1 ? '' : 's'})`);
+      lines.push('');
     }
 
     lines.push('---');

@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Hot Files on every context card**: the eight files changed most often in the last 30 days,
+  derived from the git watcher's commit history. Lock files and build output are ignored. Nothing
+  to write, nothing to maintain.
+- **Code tours as a fact category**: `add_fact` with category `tour` (one feature traced through
+  its files, checks and change boundary) renders under "Code Tours" on the project card, so the
+  session that did the reading leaves the map for the next one.
 - **Time-scoped search**: `search_memories`, `semantic_search` and `GET /search` understand time
   phrases ("last week", "in August", "2026-08-13", "3 days ago", "since 2026-07-01"). The phrase sets
   a date window first; exact FTS5 matches inside it rank ahead of embedding matches. A bare time
