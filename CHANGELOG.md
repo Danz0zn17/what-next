@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Security
+- **Local API locked to local callers**: the REST API on `localhost:3747` now rejects any request
+  whose `Host` is not localhost (closes DNS rebinding reads), any write from a foreign `Origin`
+  (closes cross-site writes and cross-site curation runs), and any write that is not
+  `application/json`. Scripts, hooks and the VS Code extension are unaffected. The ChatGPT
+  bookmarklet keeps working: `/ingest` alone also accepts `chatgpt.com` and `chat.openai.com`.
+- **Web UI escaping**: search results and the project list escape memory text, so a stored
+  `<img onerror>` payload renders as text instead of running on the local origin.
+- **`bin/local-api.js` no longer listens on all interfaces**: it now runs the main API server, so
+  Windows and Linux installs bind to 127.0.0.1 with the same checks and sanitised writes.
+- **Context-card paths are confined**: project names are validated in the tool schemas, card
+  filenames are slugged and must resolve inside `~/.whatnext/agents`, and repo pointers
+  (`AGENTS.md`, Cursor rules) are only written into git repos under the projects directory.
+- **Every memory-returning MCP tool escapes its output** and opens with the data notice, including
+  rows served from the cloud and commit messages in `since_last_session`.
+- **Cloud server**: the boot migration can no longer drop tables (it refuses to start instead);
+  welcome emails escape the name, validate the address and cap lengths; API keys are also stored
+  as a SHA-256 hash and looked up by hash; the webhook secret moves to an `X-Webhook-Secret` header
+  (query param still accepted during rollout); the rate limit keys on the proxy-appended client IP.
+
 - **Stored-memory injection defence**: everything What Next replays into a later session's system
   context (the brief, the project card, `context.md`, the `AGENTS.md` pointer) is now sanitised on
   the way in and escaped again on the way out. Harness markup that can impersonate the harness
@@ -21,6 +40,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   say so in their response when a write trips one, and `GET /flagged` lists every flagged row. A
   guarded one-off backfill flags rows written before the sanitiser existed; it writes flags only and
   never rewrites stored text.
+
+### Fixed
+- **Local writes are embedded immediately** (`src/indexer.js`): sessions and facts written through
+  the MCP tools, REST API, `/ingest` and `/import` are indexed for semantic search without waiting
+  for a cloud echo. Local-only installs previously never got embeddings.
+- **Offline fallback works**: Node fetch network failures now raise `CloudUnavailableError`, so
+  read tools fall back to local SQLite instead of failing. `WHATNEXT_PREFER_LOCAL=1` is honoured.
+- **Local rows reach the cloud**: sync pushes rows with no cloud id (outage writes, imports) in
+  small batches, after one full reconcile so rows already in the cloud adopt their id. The pull
+  cursor comes from cloud timestamps instead of the local clock.
+- **Signups**: a failed welcome email is now reported and retried (`welcome_sent_at`, resend on
+  resubmit, reconciler `--apply`); concurrent signups no longer 500; the landing form shows an
+  error when the submit fails instead of "You're in the queue"; the reconciler paginates.
+- Time-window search includes the first day; a cloud 404 falls back to local projects; curation
+  stops when its tool call times out; distinct sessions sharing a summary are no longer merged;
+  archived facts stay out of semantic search; per-project recent work on cards; the git watcher
+  walks every commit since the last seen one and only advances after a successful post; commit
+  dates compare in UTC; `.cursor/rules` directories get a managed `what-next.mdc`; empty searches
+  return nothing instead of an FTS error; intelligence flags survive partial updates.
+- `wn fact` sends a category, `wn context` shows sessions, `wn` reports the package version.
+- Installer backs up every config it rewrites, splices only the What Next tables in Codex
+  `config.toml`, writes a real systemd user unit on Linux, and XML-escapes the plist.
+- Invalid `limit`/`since` values return defaults or 400 instead of 500; `/import` is capped at 50 MB;
+  `/hybrid-search` falls back to keyword results if embedding fails.
+
+### Removed
+- Unused `express` dependency and `ENCRYPTION_SECRET` from `.env.example`.
 
 ### Added
 - **Session brief for progressive disclosure**: `~/.whatnext/brief.md` (global lessons plus one
