@@ -13,3 +13,7 @@ railway.toml
 skills/
 bin/healthcheck.js
 
+.netlify/
+*.tgz
+CLAUDE.md
+nixpacks.toml
