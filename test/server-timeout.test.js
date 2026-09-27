@@ -23,7 +23,7 @@ function withTimeout(toolName, handlerFn) {
       return {
         content: [{
           type: 'text',
-          text: `[what-next] ⚠️ ${toolName} failed: ${err.message}\n\nThe MCP server is running but encountered an error. Your session data is safe in local SQLite. You can retry or use the REST API at http://localhost:3747`,
+          text: `[what-next] ⚠️ ${toolName} failed: ${err.message}\n\nThe MCP server is running but encountered an error. Nothing was changed. You can retry or use the REST API at http://localhost:3747`,
         }],
       };
     }

@@ -4,11 +4,12 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { sanitizeFields, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS } from './sanitize.js';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, storeEmbedding, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
-import { parseTimeRange } from './timeparse.js';
+import { sanitizeFields, neutralize, DATA_NOTICE, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS } from './sanitize.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
+import { parseTimeRange, inRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
-import { generateEmbedding, cosineSimilarity } from './embeddings.js';
+import { generateEmbedding, cosineSimilarity, warmEmbedder } from './embeddings.js';
+import { indexSession, indexFact } from './indexer.js';
 import { runCuration } from './curator.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
@@ -86,27 +87,89 @@ function syncFactInBackground(args, localId) {
   });
 }
 
+const WRITE_TOOLS = new Set(['dump_session', 'add_fact', 'edit_session', 'update_project_intelligence']);
+
+// Says only what is known about the local write when a tool fails.
+function failureNote(toolName, wrote) {
+  if (wrote) return `The local write completed before the failure (${wrote}); retrying would save it twice.`;
+  if (toolName === 'curate_memory') return 'Curation was stopped; nothing further is archived after the stop, and archived facts are recoverable by ID.';
+  if (WRITE_TOOLS.has(toolName)) return 'The local write was not confirmed. Check with search_memories before retrying.';
+  return 'Nothing was changed.';
+}
+
+// Handlers get (args, ctx). ctx.signal aborts when the tool times out or the
+// client cancels, so long work (curation) stops instead of running on after a
+// failure is reported. Write handlers set ctx.wrote once the local row exists.
 function withTimeout(toolName, handlerFn) {
-  return async (args) => {
+  return async (args, extra) => {
     const start = Date.now();
-    const timer = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Tool timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS)
-    );
+    const controller = new AbortController();
+    const onCancel = () => controller.abort();
+    extra?.signal?.addEventListener?.('abort', onCancel, { once: true });
+    const ctx = { signal: controller.signal, wrote: null };
+    let timeoutId;
+    const timer = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`Tool timed out after ${TOOL_TIMEOUT_MS}ms`));
+      }, TOOL_TIMEOUT_MS);
+    });
     try {
-      const result = await Promise.race([handlerFn(args), timer]);
+      const result = await Promise.race([handlerFn(args, ctx), timer]);
       const elapsed = Date.now() - start;
       if (elapsed > 3_000) log('WARN', toolName, `slow response: ${elapsed}ms`);
       return result;
     } catch (err) {
+      controller.abort();
       log('ERROR', toolName, err.message);
       return {
         content: [{
           type: 'text',
-          text: `[what-next] ⚠️ ${toolName} failed: ${err.message}\n\nThe MCP server is running but encountered an error. Your session data is safe in local SQLite. You can retry or use the REST API at http://localhost:3747`,
+          text: `[what-next] ⚠️ ${toolName} failed: ${err.message}\n\nThe MCP server is running but encountered an error. ${failureNote(toolName, ctx.wrote)} You can retry or use the REST API at http://localhost:3747`,
         }],
       };
+    } finally {
+      clearTimeout(timeoutId);
+      extra?.signal?.removeEventListener?.('abort', onCancel);
     }
   };
+}
+
+// Project names become card filenames: no path separators, no "..".
+const projectName = z.string().min(1).max(100).regex(/^(?!.*\.\.)[^/\\]+$/, 'no path separators or ".."');
+
+// Everything the read tools return is recalled memory, some of it from the
+// cloud, so it is escaped the same way the cards are and labelled as data.
+function memoryResult(lines) {
+  const body = Array.isArray(lines) ? lines.join('\n') : String(lines);
+  return { content: [{ type: 'text', text: `${DATA_NOTICE}\n\n${neutralize(body).text}` }] };
+}
+
+// WHATNEXT_PREFER_LOCAL=1 (set by the installer): read tools answer from local
+// SQLite and ask the cloud only when local has nothing. Otherwise the cloud is
+// asked first and local answers when it is unreachable or has nothing (a 404
+// for a project that only exists locally included).
+const PREFER_LOCAL = process.env.WHATNEXT_PREFER_LOCAL === '1';
+
+async function readMemory({ local, remote, isEmpty }) {
+  const fromCloud = async () => {
+    try {
+      return await remote();
+    } catch (err) {
+      if (err instanceof CloudUnavailableError || err?.statusCode === 404) return undefined;
+      throw err;
+    }
+  };
+  if (!cloud.isEnabled()) return { data: local(), source: 'local' };
+  if (PREFER_LOCAL) {
+    const data = local();
+    if (!isEmpty(data)) return { data, source: 'local' };
+    const cloudData = await fromCloud().catch(() => undefined);
+    return cloudData !== undefined && !isEmpty(cloudData) ? { data: cloudData, source: 'cloud' } : { data, source: 'local' };
+  }
+  const cloudData = await fromCloud();
+  if (cloudData !== undefined && !isEmpty(cloudData)) return { data: cloudData, source: 'cloud' };
+  return { data: local(), source: 'local' };
 }
 
 // ─── Startup: sync any pending gists to cloud ─────────────────────────────────
@@ -152,7 +215,7 @@ server.tool(
   'dump_session',
   "Save what this session did: summary, what was built, decisions, next steps. Call at every milestone and at session end. Updates the project context card automatically.",
   {
-    project: z.string().describe('Project name (matches your folder name in ~/projects/)'),
+    project: projectName.describe('Project name (matches your folder name in ~/projects/)'),
     summary: z.string().describe('A concise summary of what happened this session'),
     what_was_built: z.string().optional().describe('Specific features, files, or components built'),
     decisions: z.string().optional().describe('Key architectural or design decisions made'),
@@ -160,13 +223,13 @@ server.tool(
     next_steps: z.string().optional().describe('What to pick up next session'),
     tags: z.string().optional().describe('Comma-separated tags e.g. "react,auth,api,bug-fix"'),
   },
-  withTimeout('dump_session', async (args) => {
+  withTimeout('dump_session', async (args, ctx) => {
     const id = addSession(args);
+    ctx.wrote = `local session ${id}`;
     // The row is stored either way; this only tells the caller that its text
     // read as an instruction and has been escaped or flagged. See sanitize.js.
     const { flags } = sanitizeFields(args, SESSION_TEXT_FIELDS);
-    const text = [args.summary, args.what_was_built, args.decisions, args.next_steps, args.tags].filter(Boolean).join(' ');
-    generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
+    indexSession(id, args);
     logAudit('dump_session', `local write complete for session ${id} (${args.project})`);
 
     syncSessionInBackground(args, id);
@@ -180,7 +243,7 @@ server.tool(
     return {
       content: [{
         type: 'text',
-        text: `Session dumped [${sourceLabel}] (local id: ${id})\nProject: ${args.project}\nSummary: ${args.summary}${injectionNote(flags)}`,
+        text: `Session dumped [${sourceLabel}] (local id: ${id})\nProject: ${args.project}\nSummary: ${neutralize(args.summary).text}${injectionNote(flags)}`,
       }],
     };
   })
@@ -195,26 +258,15 @@ server.tool(
       .describe('Which AI surface is calling — shapes the response format and depth'),
   },
   withTimeout('get_context', async ({ surface } = {}) => {
-    let context;
-    let source = 'cloud';
-
-    if (cloud.isEnabled()) {
-      try {
-        context = await cloud.getContext();
-      } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
-        source = 'local';
-      }
-    }
-
-    if (!context) {
-      source = 'local';
-      context = {
+    const { data: context, source } = await readMemory({
+      local: () => ({
         recent_sessions: getRecentSessions(5),
         facts: getAllFacts(),
         active_projects: listProjects(),
-      };
-    }
+      }),
+      remote: () => cloud.getContext(),
+      isEmpty: c => !c || (!c.recent_sessions?.length && !c.active_projects?.length),
+    });
 
     const lines = [`## What Next — Session Context [${source}]\n`];
 
@@ -243,7 +295,7 @@ server.tool(
       for (const s of context.recent_sessions?.slice(0, 5) ?? []) {
         if (s.next_steps) hermes.push(`**${s.project_name ?? '?'}**: ${s.next_steps}`);
       }
-      return { content: [{ type: 'text', text: hermes.join('\n') }] };
+      return memoryResult(hermes);
     }
 
     if (context.facts?.length > 0) {
@@ -256,7 +308,7 @@ server.tool(
       }
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -265,7 +317,7 @@ server.tool(
   'update_project_intelligence',
   "Record what an agent cannot infer from the repo: gotchas, non-obvious conventions, deployment quirks, env var names. Rendered on the project card. Do not restate the file tree.",
   {
-    project: z.string().describe('Project name (matches folder name in ~/projects/)'),
+    project: projectName.describe('Project name (matches folder name in ~/projects/)'),
     repo_path: z.string().optional().describe('Absolute path to the repo on disk'),
     stack: z.string().optional().describe('Tech stack summary e.g. "React + Vite + Supabase + Railway"'),
     key_dirs: z.string().optional().describe("Only what the tree does not make obvious: where the entry points are, which dir is generated, where the real config lives"),
@@ -274,12 +326,14 @@ server.tool(
     deployment: z.string().optional().describe('How the app is deployed e.g. "Netlify (frontend) + Railway (backend)"'),
     extra: z.string().optional().describe("Gotchas and decisions first: things that cost a past session time. Skip anything derivable from the code."),
   },
-  withTimeout('update_project_intelligence', async (args) => {
+  withTimeout('update_project_intelligence', async (args, ctx) => {
     upsertProjectIntelligence(args);
+    ctx.wrote = `project intelligence for ${args.project}`;
     logAudit('update_project_intelligence', `updated for ${args.project}`);
 
+    // The card write is local and fast; do it now so the reply is the truth.
+    const card = writeSidecarForProject(args.project);
     setImmediate(() => {
-      try { writeSidecarForProject(args.project); } catch {}
       try { writeGlobalContext(); } catch {}
     });
 
@@ -292,7 +346,9 @@ server.tool(
     return {
       content: [{
         type: 'text',
-        text: `Project intelligence updated for ${args.project}. Context card written to ~/.whatnext/agents/${args.project}.md`,
+        text: card.ok
+          ? `Project intelligence updated for ${args.project}. Context card written to ${card.path}${card.repo ? `\n${card.repo}` : ''}`
+          : `Project intelligence updated for ${args.project}, but the context card was not written: ${card.error}`,
       }],
     };
   })
@@ -303,11 +359,11 @@ server.tool(
   'get_orientation',
   "Start here for project work: stack, gotchas, last 3 sessions, open tasks, under 2000 tokens.",
   {
-    project: z.string().describe('Project name to get a focused orientation brief for'),
+    project: projectName.describe('Project name to get a focused orientation brief for'),
   },
   withTimeout('get_orientation', async ({ project }) => {
     const intel = getProjectIntelligence(project);
-    const sessions = getRecentSessions(20).filter(s => s.project_name === project).slice(0, 3);
+    const sessions = getRecentSessionsForProject(project, 3);
     const whatsNext = getWhatsNext(20).find(i => i.project_name === project);
     const globalFacts = getAllFacts().filter(f => !f.project_id).slice(0, 8);
 
@@ -348,7 +404,7 @@ server.tool(
       for (const f of globalFacts) lines.push(`${f.category}: ${f.content}`);
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -362,7 +418,7 @@ server.tool(
   },
   withTimeout('search_memories', async ({ query, limit }) => {
     let results;
-    let source = 'cloud';
+    let source;
 
     // Time phrases ("last week", "in August") narrow the window first, then
     // rank text inside it. Cloud search has no date filter, so stay local.
@@ -371,21 +427,15 @@ server.tool(
       results = searchMemories(range.text, limit, range);
       source = `local, ${range.label}`;
       query = range.text || query;
-    }
-
-    if (!results && cloud.isEnabled()) {
-      try {
-        results = await cloud.search(query);
-        // Cloud returns { sessions, facts }
-      } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
-        source = 'local';
-      }
-    }
-
-    if (!results) {
-      source = 'local';
-      results = searchMemories(query, limit);
+    } else {
+      // Cloud returns { sessions, facts }
+      const count = r => (r?.sessions?.length ?? 0) + (r?.facts?.length ?? 0);
+      ({ data: results, source } = await readMemory({
+        local: () => searchMemories(query, limit),
+        remote: () => cloud.search(query),
+        isEmpty: r => count(r) === 0,
+      }));
+      results = { sessions: results?.sessions ?? [], facts: results?.facts ?? [] };
     }
 
     const total = results.sessions.length + results.facts.length;
@@ -420,7 +470,7 @@ server.tool(
       }
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -429,29 +479,14 @@ server.tool(
   'get_project',
   "Full session history for one project, oldest to newest. Large; prefer get_orientation unless you need everything.",
   {
-    name: z.string().describe('Project name to retrieve history for'),
+    name: projectName.describe('Project name to retrieve history for'),
   },
   withTimeout('get_project', async ({ name }) => {
-    let project;
-    let source = 'cloud';
-
-    if (cloud.isEnabled()) {
-      try {
-        project = await cloud.getProject(name);
-      } catch (err) {
-        if (err.statusCode === 404) {
-          project = null;
-        } else if (!(err instanceof CloudUnavailableError)) {
-          throw err;
-        }
-        source = 'local';
-      }
-    }
-
-    if (project === undefined) {
-      source = 'local';
-      project = getProject(name);
-    }
+    const { data: project, source } = await readMemory({
+      local: () => getProject(name),
+      remote: () => cloud.getProject(name),
+      isEmpty: p => !p,
+    });
 
     if (!project) {
       return {
@@ -463,11 +498,11 @@ server.tool(
       `# ${project.name} [${source}]`,
       project.description ? `_${project.description}_` : '',
       `Created: ${project.created_at} | Last updated: ${project.updated_at}`,
-      `Sessions: ${project.sessions.length}`,
+      `Sessions: ${project.sessions?.length ?? 0}`,
       '',
     ];
 
-    for (const s of project.sessions) {
+    for (const s of project.sessions ?? []) {
       lines.push(`## Session — ${s.session_date}`);
       lines.push(s.summary);
       if (s.what_was_built) lines.push(`\n**Built:** ${s.what_was_built}`);
@@ -478,7 +513,7 @@ server.tool(
       lines.push('\n---\n');
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -488,22 +523,11 @@ server.tool(
   "All known projects with session counts and last activity.",
   {},
   withTimeout('list_projects', async () => {
-    let projects;
-    let source = 'cloud';
-
-    if (cloud.isEnabled()) {
-      try {
-        projects = await cloud.listProjects();
-      } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
-        source = 'local';
-      }
-    }
-
-    if (!projects) {
-      source = 'local';
-      projects = listProjects();
-    }
+    const { data: projects, source } = await readMemory({
+      local: () => listProjects(),
+      remote: () => cloud.listProjects(),
+      isEmpty: p => !p?.length,
+    });
 
     if (projects.length === 0) {
       return {
@@ -517,7 +541,7 @@ server.tool(
       if (p.description) lines.push(`  _${p.description}_`);
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -528,14 +552,14 @@ server.tool(
   {
     category: z.string().describe('Category e.g. "preference", "pattern", "lesson" (a fixed mistake, shown first on cards, never auto-archived), "tour" (a code tour: one feature traced through 5-6 files with function names, checks and change boundary, shown on the project card), "stack-choice"'),
     content: z.string().describe('The fact or insight to remember'),
-    project: z.string().optional().describe('Associate with a project, or leave blank for global facts'),
+    project: projectName.optional().describe('Associate with a project, or leave blank for global facts'),
     tags: z.string().optional().describe('Comma-separated tags'),
   },
-  withTimeout('add_fact', async (args) => {
+  withTimeout('add_fact', async (args, ctx) => {
     const id = addFact(args);
+    ctx.wrote = `local fact ${id}`;
     const { flags } = sanitizeFields(args, FACT_TEXT_FIELDS);
-    const text = [args.category, args.content, args.tags].filter(Boolean).join(' ');
-    generateEmbedding(text).then(emb => storeEmbedding('fact', id, emb)).catch(() => {});
+    indexFact(id, args);
     logAudit('add_fact', `local write complete for fact ${id}`);
 
     syncFactInBackground(args, id);
@@ -545,14 +569,64 @@ server.tool(
     return {
       content: [{
         type: 'text',
-        text: `Fact stored [${source}] (local id: ${id}) [${scope}]\nCategory: ${args.category}\n${args.content}${injectionNote(flags)}`,
+        text: `Fact stored [${source}] (local id: ${id}) [${scope}]\nCategory: ${neutralize(args.category).text}\n${neutralize(args.content).text}${injectionNote(flags)}`,
       }],
     };
   })
 );
 
 // ─── TOOL: semantic_search ────────────────────────────────────────────────────
-// Cloud-first (falls back to local embeddings if cloud unavailable)
+// Cloud-first (falls back to local embeddings if cloud unavailable), or
+// local-first with WHATNEXT_PREFER_LOCAL=1.
+// Archived facts are superseded by a newer one; never surface them.
+const isLiveRecord = (rowtype, rec) => !!rec && (rowtype !== 'fact' || rec.status === 'active');
+
+async function cloudSemantic(query, limit) {
+  const { results } = await cloud.semanticSearch(query, limit);
+  const lines = [`Semantic search: "${query}" [cloud]\n`];
+  for (const r of results ?? []) {
+    if (r.score < 0.3) continue;
+    lines.push(`**[${r.rowtype}]** (score: ${Number(r.score).toFixed(2)})`);
+    lines.push(r.text ?? '');
+    lines.push('');
+  }
+  return lines.length > 1 ? lines : null;
+}
+
+// Returns { lines } to show, or { message } when there is nothing to show.
+async function localSemantic(query, limit) {
+  const allEmbeddings = getAllEmbeddings();
+  if (allEmbeddings.length === 0) {
+    return { message: 'No embeddings stored yet. Memories will be indexed as you add them.' };
+  }
+  const queryEmbedding = await generateEmbedding(query);
+  const scored = allEmbeddings
+    .map(e => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
+    .sort((a, b) => b.score - a.score);
+
+  const lines = [`Semantic search: "${query}" [local]\n`];
+  let shown = 0;
+  for (const match of scored) {
+    if (shown >= limit || match.score < 0.3) break;
+    const record = match.rowtype === 'session'
+      ? getSessionById(match.row_id)
+      : getFactById(match.row_id);
+    if (!isLiveRecord(match.rowtype, record)) continue;
+
+    lines.push(`**[${record.project_name ?? 'global'}]** (score: ${match.score.toFixed(2)})`);
+    if (match.rowtype === 'session') {
+      lines.push(record.summary);
+      if (record.what_was_built) lines.push(`Built: ${record.what_was_built}`);
+      if (record.next_steps) lines.push(`Next: ${record.next_steps}`);
+    } else {
+      lines.push(`${record.category}: ${record.content}`);
+    }
+    lines.push('');
+    shown++;
+  }
+  return shown > 0 ? { lines } : { message: `No strong matches found for: "${query}"` };
+}
+
 server.tool(
   'semantic_search',
   "Meaning-based search when you lack exact words. With a time phrase, exact matches in that window rank first and embeddings fill the rest.",
@@ -592,9 +666,9 @@ server.tool(
           if (m.score < 0.3) break;
           if (seen.has(`${m.rowtype}:${m.row_id}`)) continue;
           const rec = m.rowtype === 'session' ? getSessionById(m.row_id) : getFactById(m.row_id);
-          if (!rec) continue;
+          if (!isLiveRecord(m.rowtype, rec)) continue;
           const when = String(m.rowtype === 'session' ? rec.session_date : rec.created_at);
-          if (when < range.since || when >= range.until) continue;
+          if (!inRange(when, range)) continue;
           lines.push(`**[${rec.project_name ?? 'global'}]** ${when.split('T')[0]} (score: ${m.score.toFixed(2)})`);
           lines.push(m.rowtype === 'session' ? rec.summary : `${rec.category}: ${rec.content}`);
           lines.push('');
@@ -602,69 +676,33 @@ server.tool(
         }
       }
       if (lines.length === 1) lines.push(`Nothing found between ${range.label}.`);
-      return { content: [{ type: 'text', text: lines.join('\n') }] };
+      return memoryResult(lines);
     }
 
-    // Try cloud semantic search first
-    if (cloud.isEnabled()) {
+    const tryCloud = async () => {
+      if (!cloud.isEnabled()) return null;
       try {
-        const { results } = await cloud.semanticSearch(query, limit);
-        if (results.length > 0) {
-          const lines = [`Semantic search: "${query}" [cloud]\n`];
-          for (const r of results) {
-            if (r.score < 0.3) continue;
-            lines.push(`**[${r.rowtype}]** (score: ${Number(r.score).toFixed(2)})`);
-            lines.push(r.text ?? '');
-            lines.push('');
-          }
-          if (lines.length > 1) {
-            return { content: [{ type: 'text', text: lines.join('\n') }] };
-          }
-        }
+        return await cloudSemantic(query, limit);
       } catch (err) {
-        if (!(err instanceof CloudUnavailableError)) throw err;
+        if (err instanceof CloudUnavailableError) return null;
+        throw err;
       }
+    };
+
+    if (!PREFER_LOCAL) {
+      const cloudLines = await tryCloud();
+      if (cloudLines) return memoryResult(cloudLines);
     }
 
-    // Fall back to local embeddings
-    const queryEmbedding = await generateEmbedding(query);
-    const allEmbeddings = getAllEmbeddings();
+    const local = await localSemantic(query, limit);
+    if (local.lines) return memoryResult(local.lines);
 
-    if (allEmbeddings.length === 0) {
-      return { content: [{ type: 'text', text: 'No embeddings stored yet. Memories will be indexed as you add them.' }] };
+    if (PREFER_LOCAL) {
+      const cloudLines = await tryCloud().catch(() => null);
+      if (cloudLines) return memoryResult(cloudLines);
     }
 
-    const scored = allEmbeddings
-      .map(e => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-
-    const lines = [`Semantic search: "${query}" [local]\n`];
-
-    for (const match of scored) {
-      if (match.score < 0.3) continue;
-      const record = match.rowtype === 'session'
-        ? getSessionById(match.row_id)
-        : getFactById(match.row_id);
-
-      if (!record) continue;
-
-      lines.push(`**[${record.project_name ?? 'global'}]** (score: ${match.score.toFixed(2)})`);
-      if (match.rowtype === 'session') {
-        lines.push(record.summary);
-        if (record.what_was_built) lines.push(`Built: ${record.what_was_built}`);
-        if (record.next_steps) lines.push(`Next: ${record.next_steps}`);
-      } else {
-        lines.push(`${record.category}: ${record.content}`);
-      }
-      lines.push('');
-    }
-
-    if (lines.length === 1) {
-      return { content: [{ type: 'text', text: `No strong matches found for: "${query}"` }] };
-    }
-
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return { content: [{ type: 'text', text: local.message }] };
   })
 );
 
@@ -681,17 +719,15 @@ server.tool(
     next_steps: z.string().optional().describe('Updated next steps'),
     tags: z.string().optional().describe('Updated comma-separated tags'),
   },
-  withTimeout('edit_session', async ({ id, ...updates }) => {
+  withTimeout('edit_session', async ({ id, ...updates }, ctx) => {
     const changed = editSession(id, updates);
     if (!changed) {
       return { content: [{ type: 'text', text: `Session ${id} not found or no fields to update.` }] };
     }
-    // Refresh embedding for updated session
+    ctx.wrote = `edit to local session ${id}`;
+    // Re-index from the row as stored after the edit
     const session = getSessionById(id);
-    if (session) {
-      const text = [session.summary, session.what_was_built, session.decisions, session.next_steps, session.tags].filter(Boolean).join(' ');
-      generateEmbedding(text).then(emb => storeEmbedding('session', id, emb)).catch(() => {});
-    }
+    if (session) indexSession(id, session);
     return { content: [{ type: 'text', text: `Session ${id} updated.` }] };
   })
 );
@@ -714,7 +750,7 @@ server.tool(
       lines.push(`→ ${item.next_steps}`);
       lines.push('');
     }
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -747,12 +783,15 @@ server.tool(
   {
     dry_run: z.boolean().optional().default(false).describe('Preview what would be archived without changing anything'),
   },
-  withTimeout('curate_memory', async ({ dry_run }) => {
-    const report = await runCuration({ apply: !dry_run });
+  withTimeout('curate_memory', async ({ dry_run }, ctx) => {
+    // Leave headroom under the tool timeout so the report gets back; facts not
+    // indexed in time are picked up by the next run.
+    const report = await runCuration({ apply: !dry_run, signal: ctx.signal, budgetMs: TOOL_TIMEOUT_MS - 4_000 });
     logAudit('curate_memory', `scanned ${report.facts_scanned}, ${dry_run ? 'would archive' : 'archived'} ${report.auto_archived.length}, flagged ${report.flagged_for_review.length}`);
 
     const lines = [`## Memory Curation${dry_run ? ' (dry run — nothing changed)' : ''}`];
     lines.push(`Scanned ${report.facts_scanned} active fact(s) in ${report.duration_ms}ms.`);
+    if (report.aborted) lines.push('Run was cancelled part way; only the archives listed below happened.');
     lines.push('');
 
     if (report.auto_archived.length > 0) {
@@ -789,7 +828,7 @@ server.tool(
   'since_last_session',
   "What changed in a project since its last session: commits captured by the watcher, with Claude session links when present.",
   {
-    project: z.string().describe('Project name to check'),
+    project: projectName.describe('Project name to check'),
   },
   withTimeout('since_last_session', async (args) => {
     const last = getLastSession(args.project);
@@ -824,10 +863,17 @@ server.tool(
       }
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// Optionally load the embedding model shortly after startup, off the request path,
+// so the first semantic_search does not spend its timeout on a cold model load.
+// Opt-in: every client spawns its own MCP process and the model costs ~100MB each.
+if (process.env.WHATNEXT_WARM_EMBEDDER === '1') {
+  setTimeout(() => { warmEmbedder(); }, 5_000).unref();
+}

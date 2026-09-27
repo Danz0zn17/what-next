@@ -52,8 +52,8 @@ test('card without tours or commits has neither section', () => {
 });
 
 test('AGENTS.md pointer: written when repo has no CLAUDE.md, skipped when it does', () => {
-  const repoA = join(TEST_HOME, 'repoA'); mkdirSync(join(repoA, '.git'), { recursive: true });
-  const repoB = join(TEST_HOME, 'repoB'); mkdirSync(join(repoB, '.git'), { recursive: true }); writeFileSync(join(repoB, 'CLAUDE.md'), '# b');
+  const repoA = join(TEST_HOME, 'projects', 'repoA'); mkdirSync(join(repoA, '.git'), { recursive: true });
+  const repoB = join(TEST_HOME, 'projects', 'repoB'); mkdirSync(join(repoB, '.git'), { recursive: true }); writeFileSync(join(repoB, 'CLAUDE.md'), '# b');
   upsertProjectIntelligence({ project: 'pa', repo_path: repoA, stack: 'node' });
   upsertProjectIntelligence({ project: 'pb', repo_path: repoB, stack: 'node' });
   writeSidecarForProject('pa'); writeSidecarForProject('pb');

@@ -111,8 +111,14 @@ export function findDuplicatePairs(facts, embeddingById, {
   return { auto, review };
 }
 
-export async function runCuration({ apply = true } = {}) {
+// `signal` (AbortSignal) stops the run between items: nothing further is
+// indexed or archived once it fires, and the report says so. `budgetMs` caps
+// the embedding backfill so a caller with a deadline still gets a report;
+// facts left unindexed are picked up by the next run.
+export async function runCuration({ apply = true, signal, budgetMs } = {}) {
   const start = Date.now();
+  const overBudget = () => budgetMs != null && Date.now() - start >= budgetMs;
+  const stopped = () => signal?.aborted === true;
   const facts = getActiveFacts();
   const embeddingById = new Map(getFactEmbeddings().map(r => [r.row_id, r.embedding]));
 
@@ -123,6 +129,7 @@ export async function runCuration({ apply = true } = {}) {
     const mod = await loadEmbeddings();
     if (mod?.generateEmbedding) {
       for (const f of missing.slice(0, MAX_INDEX_PER_RUN)) {
+        if (stopped() || overBudget()) break;
         try {
           const emb = await mod.generateEmbedding([f.category, f.content, f.tags].filter(Boolean).join(' '));
           storeEmbedding('fact', f.id, emb);
@@ -138,32 +145,37 @@ export async function runCuration({ apply = true } = {}) {
   const { auto, review } = findDuplicatePairs(facts, embeddingById);
 
   const touchedProjects = new Set();
+  const applied = [];
   if (apply) {
     for (const pair of auto) {
+      if (stopped()) break;
       archiveFact(pair.archived_id, pair.kept_id);
+      applied.push(pair);
       if (pair.project) touchedProjects.add(pair.project);
     }
   }
+  const archived = apply ? applied : auto;
 
   const report = {
     ran_at: new Date().toISOString(),
     dry_run: !apply,
+    aborted: stopped(),
     facts_scanned: facts.length,
     unindexed_remaining: Math.max(0, missing.length - indexed),
-    auto_archived: auto,
+    auto_archived: archived,
     flagged_for_review: review,
     duration_ms: Date.now() - start,
   };
   recordCurationRun({
     dry_run: !apply,
     facts_scanned: facts.length,
-    auto_archived: auto.length,
+    auto_archived: archived.length,
     flagged: review.length,
     report,
   });
 
   // Archived facts change what context cards show — refresh them
-  if (apply && auto.length > 0) {
+  if (apply && archived.length > 0) {
     try { writeGlobalContext(); } catch {}
     for (const project of touchedProjects) {
       try { writeSidecarForProject(project); } catch {}
@@ -171,7 +183,7 @@ export async function runCuration({ apply = true } = {}) {
   }
 
   process.stderr.write(
-    `[curator] scanned ${facts.length} facts — ${apply ? 'archived' : 'would archive'} ${auto.length}, ` +
+    `[curator] scanned ${facts.length} facts - ${apply ? 'archived' : 'would archive'} ${archived.length}${report.aborted ? ' (aborted)' : ''}, ` +
     `flagged ${review.length} for review (${report.duration_ms}ms)\n`
   );
   return report;

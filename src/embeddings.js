@@ -1,12 +1,21 @@
 import { pipeline } from '@huggingface/transformers';
 
-let embedder = null;
+// One shared load: concurrent callers wait on the same promise instead of
+// each loading the model. A failed load is forgotten so the next call retries.
+let embedderPromise = null;
 
-async function getEmbedder() {
-  if (!embedder) {
-    embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+function getEmbedder() {
+  if (!embedderPromise) {
+    embedderPromise = pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2')
+      .catch((err) => { embedderPromise = null; throw err; });
   }
-  return embedder;
+  return embedderPromise;
+}
+
+// Load the model ahead of the first search so semantic_search does not pay
+// the cold start inside its tool timeout. Never throws.
+export function warmEmbedder() {
+  return getEmbedder().then(() => true, () => false);
 }
 
 export async function generateEmbedding(text) {

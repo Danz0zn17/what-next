@@ -18,10 +18,10 @@
  * footer) so a hook that injects it does not break prompt caching every day.
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { getProjectIntelligence, getRecentSessions, getWhatsNext, getAllFacts, listProjects, getRecentCommits, getHotFiles } from './db.js';
+import { join, resolve, sep } from 'node:path';
+import { getProjectIntelligence, getRecentSessions, getRecentSessionsForProject, getWhatsNext, getAllFacts, listProjects, getRecentCommits, getHotFiles } from './db.js';
 import { neutralize, DATA_NOTICE } from './sanitize.js';
 
 const HOME = homedir();
@@ -58,11 +58,57 @@ function truncate(str, n) {
   return s.length > n ? s.slice(0, n - 3) + '...' : s;
 }
 
+// Card filename for a project. Ordinary names ("what-next", "gooner-news")
+// map to themselves so existing cards and hooks keep working; anything that
+// could leave AGENTS_DIR (separators, leading dots) is flattened.
+export function cardFileName(projectName) {
+  const slug = String(projectName ?? '')
+    .replace(/[^\p{L}\p{N}._ -]+/gu, '-')
+    .replace(/^[.\s-]+/, '')
+    .slice(0, 100)
+    .trim();
+  return `${slug || 'project'}.md`;
+}
+
+export function cardPathFor(projectName) {
+  const root = resolve(AGENTS_DIR);
+  const filePath = resolve(root, cardFileName(projectName));
+  if (!filePath.startsWith(root + sep)) throw new Error(`card path escapes ${root}`);
+  return filePath;
+}
+
+function projectsDir() {
+  return process.env.WHATNEXT_PROJECTS_DIR || join(homedir(), 'projects');
+}
+
+// A repo path from project intelligence is caller-supplied. Only write the
+// AGENTS.md / Cursor pointer into an existing git repo under the projects dir
+// (WHATNEXT_PROJECTS_DIR or ~/projects, the same root the watcher polls).
+// Returns the resolved repo path, or null with the reason.
+export function allowedRepoPath(repoPath) {
+  let root;
+  try {
+    root = realpathSync(projectsDir());
+  } catch {
+    return { path: null, reason: `projects dir ${projectsDir()} does not exist` };
+  }
+  try {
+    const real = realpathSync(resolve(String(repoPath)));
+    if (!real.startsWith(root + sep)) return { path: null, reason: `not inside ${root}` };
+    if (!statSync(real).isDirectory() || !existsSync(join(real, '.git'))) return { path: null, reason: 'not a git repo' };
+    return { path: real, reason: null };
+  } catch {
+    return { path: null, reason: 'path does not exist' };
+  }
+}
+
+// Returns { ok, path, repo } so a caller can report what actually happened.
+// Never throws.
 export function writeSidecarForProject(projectName) {
   try {
     ensureDirs();
     const intel = getProjectIntelligence(projectName);
-    const sessions = getRecentSessions(20).filter(s => s.project_name === projectName).slice(0, 3);
+    const sessions = getRecentSessionsForProject(projectName, 3);
     const commits = getRecentCommits(projectName, 5);
     const whatsNext = getWhatsNext(20).find(i => i.project_name === projectName);
     const projectFacts = getAllFacts().filter(f => f.project_name === projectName);
@@ -156,7 +202,7 @@ export function writeSidecarForProject(projectName) {
     lines.push('---');
     lines.push(`_Updated ${new Date().toISOString().split('T')[0]}. This file is auto-maintained by What Next. Do not edit manually._`);
 
-    const filePath = join(AGENTS_DIR, `${projectName}.md`);
+    const filePath = cardPathFor(projectName);
     const content = lines.join('\n');
     writeFileSync(filePath, content, 'utf8');
     if (content.length > CARD_WARN_CHARS) {
@@ -164,12 +210,21 @@ export function writeSidecarForProject(projectName) {
     }
 
     // Auto-write .cursorrules / AGENTS.md pointer if the repo is known
+    let repo = null;
     if (intel?.repo_path) {
-      writeCursorRules(projectName, intel.repo_path, filePath);
-      writeAgentsMd(projectName, intel.repo_path, filePath);
+      const { path: repoPath, reason } = allowedRepoPath(intel.repo_path);
+      if (repoPath) {
+        writeCursorRules(projectName, repoPath, filePath);
+        writeAgentsMd(projectName, repoPath, filePath);
+        repo = `pointer checked in ${repoPath}`;
+      } else {
+        repo = `repo pointer skipped (${reason})`;
+      }
     }
+    return { ok: true, path: filePath, repo };
   } catch (err) {
     process.stderr.write(`[sidecar] Failed to write sidecar for ${projectName}: ${err.message}\n`);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -192,14 +247,31 @@ function writeCursorRules(projectName, repoPath, cardPath) {
       readFileSync(cardPath, 'utf8').slice(0, 2000),
     ].join('\n');
 
-    if (hasCursorRules) {
-      const existing = readFileSync(cursorRulesPath, 'utf8');
+    // Append (or replace) the managed block in a rules file, keeping whatever
+    // the user wrote above the marker.
+    const mergeInto = (path) => {
+      const existing = readFileSync(path, 'utf8');
       const markerIdx = existing.indexOf(marker);
       const base = markerIdx >= 0 ? existing.slice(0, markerIdx).trimEnd() : existing.trimEnd();
-      writeFileSync(cursorRulesPath, base ? `${base}\n\n${block}` : block, 'utf8');
-    } else {
-      writeFileSync(join(cursorDir, 'rules'), block, 'utf8');
+      writeFileSync(path, base ? `${base}\n\n${block}` : block, 'utf8');
+    };
+
+    if (hasCursorRules) {
+      mergeInto(cursorRulesPath);
+      return;
     }
+    // Current Cursor reads .cursor/rules/*.mdc; older builds read a single
+    // .cursor/rules file. Only ever write our own managed file in the dir.
+    const rulesPath = join(cursorDir, 'rules');
+    if (existsSync(rulesPath) && !statSync(rulesPath).isDirectory()) {
+      mergeInto(rulesPath);
+      return;
+    }
+    mkdirSync(rulesPath, { recursive: true });
+    const mdcPath = join(rulesPath, 'what-next.mdc');
+    if (existsSync(mdcPath) && !readFileSync(mdcPath, 'utf8').includes(marker)) return; // user file, leave it
+    const frontmatter = ['---', `description: What Next context card for ${projectName}`, 'alwaysApply: true', '---', ''].join('\n');
+    writeFileSync(mdcPath, frontmatter + block, 'utf8');
   } catch {
     // cursor rules write is best-effort, never throw
   }

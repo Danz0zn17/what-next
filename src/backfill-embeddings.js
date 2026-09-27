@@ -5,7 +5,8 @@ import db, { storeEmbedding } from './db.js';
 import { generateEmbedding } from './embeddings.js';
 
 const sessions = db.prepare('SELECT s.*, p.name as project_name FROM sessions s JOIN projects p ON p.id = s.project_id').all();
-const facts = db.prepare('SELECT * FROM facts').all();
+// Archived facts are superseded; archiveFact drops their embeddings on purpose.
+const facts = db.prepare("SELECT * FROM facts WHERE status = 'active'").all();
 
 console.log(`Backfilling ${sessions.length} sessions and ${facts.length} facts...`);
 

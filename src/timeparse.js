@@ -82,3 +82,17 @@ export function parseTimeRange(query, now = new Date()) {
   }
   return null;
 }
+
+// Dates are stored both as "2026-09-21 13:41:56" (SQLite) and
+// "2026-09-21T13:41:56.000Z" (cloud sync). Compare only after normalising
+// both sides to the first form; raw string comparison puts "T" after " ".
+export const sqlDate = value => String(value).slice(0, 19).replace('T', ' ');
+
+/** True when `when` falls inside the half-open range [since, until). */
+export function inRange(when, { since, until } = {}) {
+  if (when == null) return false;
+  const w = sqlDate(when);
+  if (since && w < sqlDate(since)) return false;
+  if (until && w >= sqlDate(until)) return false;
+  return true;
+}

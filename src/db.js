@@ -3,7 +3,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
 import { homedir } from 'os';
-import { sanitizeFields, flagsToColumn, detectFlags, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, INTEL_TEXT_FIELDS } from './sanitize.js';
+import { sanitizeFields, flagsToColumn, detectFlags, neutralize, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, INTEL_TEXT_FIELDS } from './sanitize.js';
+import { sqlDate } from './timeparse.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WHATNEXT_DATA_DIR || join(homedir(), '.whatnext', 'data');
@@ -129,21 +130,27 @@ try { db.exec('ALTER TABLE project_intelligence ADD COLUMN injection_flags TEXT'
 
 // One-off cleanup (v2.2.0): remove sessions/facts that are exact echoes of a
 // row already present (same project + text), keeping the oldest row and its
-// cloud id. FTS rows and embeddings of removed rows are dropped too.
+// cloud id. FTS rows and embeddings of removed rows are dropped too. A session
+// only counts as an echo when every text field and the day match, so two real
+// sessions that happen to share a summary both survive.
 export function dedupeCloudEchoes() {
   const done = db.prepare("SELECT value FROM sync_state WHERE key = 'dedupe_echoes_v1'").get();
   if (done) return { sessions_removed: 0, facts_removed: 0, skipped: true };
 
   const run = db.transaction(() => {
     const sessionGroups = db.prepare(`
-      SELECT project_id, summary, COUNT(*) AS n FROM sessions GROUP BY project_id, summary HAVING n > 1
+      SELECT project_id, summary, what_was_built, decisions, stack, next_steps, tags, date(session_date) AS day, COUNT(*) AS n
+      FROM sessions
+      GROUP BY project_id, summary, what_was_built, decisions, stack, next_steps, tags, date(session_date) HAVING n > 1
     `).all();
     let sessionsRemoved = 0;
     for (const g of sessionGroups) {
       const rows = db.prepare(`
         SELECT id, summary, what_was_built, decisions, stack, next_steps, tags FROM sessions
-        WHERE project_id = ? AND summary = ? ORDER BY (cloud_id IS NULL) ASC, id ASC
-      `).all(g.project_id, g.summary);
+        WHERE project_id = ? AND summary = ? AND what_was_built IS ? AND decisions IS ? AND stack IS ?
+          AND next_steps IS ? AND tags IS ? AND date(session_date) IS ?
+        ORDER BY (cloud_id IS NULL) ASC, id ASC
+      `).all(g.project_id, g.summary, g.what_was_built, g.decisions, g.stack, g.next_steps, g.tags, g.day);
       for (const r of rows.slice(1)) {
         db.prepare(`INSERT INTO sessions_fts(sessions_fts, rowid, summary, what_was_built, decisions, stack, next_steps, tags)
                     VALUES('delete', ?, ?, ?, ?, ?, ?, ?)`)
@@ -299,6 +306,17 @@ export function getRecentSessions(limit = 5) {
   `).all(limit);
 }
 
+export function getRecentSessionsForProject(projectName, limit = 3) {
+  return db.prepare(`
+    SELECT s.*, p.name as project_name
+    FROM sessions s
+    JOIN projects p ON p.id = s.project_id
+    WHERE p.name = ?
+    ORDER BY s.session_date DESC
+    LIMIT ?
+  `).all(projectName, limit);
+}
+
 // --- What's next: most recent open next_steps per project ---
 export function getWhatsNext(limit = 8) {
   return db.prepare(`
@@ -347,16 +365,17 @@ function ftsQuery(query) {
 }
 
 // Dates are stored both as "2026-09-21 13:41:56" (SQLite) and
-// "2026-09-21T13:41:56.000Z" (cloud sync); normalise both sides to the
-// first form before comparing.
-const sqlDate = iso => String(iso).slice(0, 19).replace('T', ' ');
-
+// "2026-09-21T13:41:56.000Z" (cloud sync); sqlDate (timeparse.js) normalises
+// both sides to the first form before comparing.
 export function searchMemories(query, limit = 10, { since, until } = {}) {
   const empty = !query.trim();
   query = ftsQuery(query);
   const ranged = since || until;
   const range = (col) => ranged ? ` AND replace(substr(${col}, 1, 19), 'T', ' ') >= ? AND replace(substr(${col}, 1, 19), 'T', ' ') < ?` : '';
   const rangeArgs = ranged ? [since ? sqlDate(since) : '0000', until ? sqlDate(until) : '9999'] : [];
+
+  // Nothing to match and no window: FTS5 throws on MATCH ''.
+  if (empty && !ranged) return { sessions: [], facts: [] };
 
   if (empty && ranged) {
     const sessions = db.prepare(`
@@ -462,16 +481,18 @@ export function upsertProjectIntelligence({ project, repo_path, stack, key_dirs,
   const projectId = upsertProject(project);
   const { values: c, flags } = sanitizeFields(
     { repo_path, stack, key_dirs, conventions, env_vars, deployment, extra }, INTEL_TEXT_FIELDS);
-  const existing = db.prepare('SELECT id FROM project_intelligence WHERE project_id = ?').get(projectId);
+  const existing = db.prepare('SELECT * FROM project_intelligence WHERE project_id = ?').get(projectId);
   if (existing) {
     const fields = [];
     const params = [];
+    const merged = { ...existing };
     for (const [k, v] of Object.entries(c)) {
-      if (v !== undefined && v !== null) { fields.push(`${k} = ?`); params.push(v); }
+      if (v !== undefined && v !== null) { fields.push(`${k} = ?`); params.push(v); merged[k] = v; }
     }
     if (fields.length) {
+      // Flag the row as it reads after the update, not just the fields sent now.
       fields.push('injection_flags = ?');
-      params.push(flagsToColumn(flags));
+      params.push(flagsToColumn(sanitizeFields(merged, INTEL_TEXT_FIELDS).flags));
       fields.push("updated_at = datetime('now')");
       params.push(projectId);
       db.prepare(`UPDATE project_intelligence SET ${fields.join(', ')} WHERE project_id = ?`).run(...params);
@@ -494,23 +515,22 @@ export function getProjectIntelligence(projectName) {
   `).get(projectName);
 }
 
-export function getAllProjectIntelligence() {
-  return db.prepare(`
-    SELECT pi.*, p.name as project_name
-    FROM project_intelligence pi
-    JOIN projects p ON p.id = pi.project_id
-    ORDER BY pi.updated_at DESC
-  `).all();
+// --- Commit context helpers ---
+// Commit text comes from any repo on disk, so it is escaped like any other
+// replayed memory. committed_at arrives from git with a local offset
+// (%aI, "+02:00"); store it as UTC so it compares with session dates.
+function utcIso(value) {
+  const d = value ? new Date(value) : new Date();
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
 }
 
-// --- Commit context helpers ---
 export function addCommitContext({ project, commit_hash, message, changed_files, committed_at, session_url }) {
   const projectId = upsertProject(project);
   try {
     const result = db.prepare(`
       INSERT OR IGNORE INTO commit_contexts (project_id, commit_hash, message, changed_files, committed_at, session_url)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(projectId, commit_hash, message, changed_files ?? null, committed_at ?? new Date().toISOString(), session_url ?? null);
+    `).run(projectId, commit_hash, neutralize(String(message ?? '')).text, changed_files ? neutralize(String(changed_files)).text : null, utcIso(committed_at), session_url ?? null);
     return result.lastInsertRowid;
   } catch {
     return null;
@@ -538,8 +558,8 @@ export function getHotFiles(projectName, { days = 30, limit = 8 } = {}) {
     FROM commit_contexts cc
     JOIN projects p ON p.id = cc.project_id
     WHERE p.name = ? AND cc.changed_files IS NOT NULL
-      AND replace(substr(cc.committed_at, 1, 19), 'T', ' ') >= ?
-  `).all(projectName, since.slice(0, 19).replace('T', ' '));
+      AND datetime(cc.committed_at) >= datetime(?)
+  `).all(projectName, since);
   const counts = new Map();
   for (const r of rows) {
     for (const f of r.changed_files.split('\n')) {
@@ -571,8 +591,8 @@ export function getCommitsSince(projectName, since) {
     SELECT cc.message, cc.committed_at, cc.changed_files, cc.session_url
     FROM commit_contexts cc
     JOIN projects p ON p.id = cc.project_id
-    WHERE p.name = ? AND cc.committed_at > ?
-    ORDER BY cc.committed_at ASC
+    WHERE p.name = ? AND datetime(cc.committed_at) > datetime(?)
+    ORDER BY datetime(cc.committed_at) ASC
   `).all(projectName, since);
 }
 
@@ -625,15 +645,24 @@ export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_w
   const { values: v, flags } = sanitizeFields(
     { summary, what_was_built, decisions, stack, next_steps, tags }, SESSION_TEXT_FIELDS);
   // Same session already stored locally (written here, then echoed back by
-  // the cloud): adopt the cloud id rather than inserting again.
-  const twin = db.prepare(`
-    SELECT id, cloud_id FROM sessions WHERE project_id = ? AND summary = ?
-    ORDER BY (cloud_id IS NULL) DESC, id ASC LIMIT 1
-  `).get(projectId, v.summary);
-  if (twin) {
-    if (cloud_id && !twin.cloud_id) setSessionCloudId(twin.id, cloud_id);
+  // the cloud): adopt the cloud id rather than inserting again. A local row
+  // with no cloud id yet is waiting for exactly this echo, and the cloud
+  // stamps its own session_date, so those match on project + summary and the
+  // nearest date wins. A row that already has a (different) cloud id is only a
+  // duplicate when the date matches too; otherwise it is a separate session
+  // that happens to share a summary.
+  const twins = db.prepare(`
+    SELECT id, cloud_id, session_date FROM sessions WHERE project_id = ? AND summary = ? ORDER BY id ASC
+  `).all(projectId, v.summary);
+  const incoming = session_date ? Date.parse(session_date) : NaN;
+  const pending = twins.filter(t => !t.cloud_id);
+  if (pending.length > 0 && (cloud_id || !session_date)) {
+    const gap = t => Math.abs(Date.parse(sqlDate(t.session_date).replace(' ', 'T') + 'Z') - incoming) || 0;
+    const twin = pending.reduce((best, t) => (gap(t) < gap(best) ? t : best));
+    if (cloud_id) setSessionCloudId(twin.id, cloud_id);
     return null;
   }
+  if (twins.some(t => !session_date || sqlDate(t.session_date) === sqlDate(session_date))) return null;
   const result = db.prepare(`
     INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id, injection_flags)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -668,7 +697,7 @@ export function upsertFactFromCloud({ cloud_id, project_name, category, content,
 // Flags only: stored text is never rewritten here, because the render pass in
 // sidecar.js already escapes on the way out and silently editing a customer's
 // own memory is not this function's call to make.
-export function backfillInjectionFlags() {
+function backfillInjectionFlags() {
   const scanTable = (table, fields) => {
     const rows = db.prepare(`SELECT id, ${fields.join(', ')} FROM ${table}`).all();
     const stmt = db.prepare(`UPDATE ${table} SET injection_flags = ? WHERE id = ?`);
