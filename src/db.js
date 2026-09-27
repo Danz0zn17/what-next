@@ -139,16 +139,16 @@ export function dedupeCloudEchoes() {
 
   const run = db.transaction(() => {
     const sessionGroups = db.prepare(`
-      SELECT project_id, summary, what_was_built, decisions, stack, next_steps, tags, date(session_date) AS day, COUNT(*) AS n
+      SELECT project_id, summary, what_was_built, decisions, stack, next_steps, tags, substr(session_date, 1, 10) AS day, COUNT(*) AS n
       FROM sessions
-      GROUP BY project_id, summary, what_was_built, decisions, stack, next_steps, tags, date(session_date) HAVING n > 1
+      GROUP BY project_id, summary, what_was_built, decisions, stack, next_steps, tags, substr(session_date, 1, 10) HAVING n > 1
     `).all();
     let sessionsRemoved = 0;
     for (const g of sessionGroups) {
       const rows = db.prepare(`
         SELECT id, summary, what_was_built, decisions, stack, next_steps, tags FROM sessions
         WHERE project_id = ? AND summary = ? AND what_was_built IS ? AND decisions IS ? AND stack IS ?
-          AND next_steps IS ? AND tags IS ? AND date(session_date) IS ?
+          AND next_steps IS ? AND tags IS ? AND substr(session_date, 1, 10) IS ?
         ORDER BY (cloud_id IS NULL) ASC, id ASC
       `).all(g.project_id, g.summary, g.what_was_built, g.decisions, g.stack, g.next_steps, g.tags, g.day);
       for (const r of rows.slice(1)) {
