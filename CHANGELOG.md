@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-27
+
+### Packaging
+- **npm installs work again**: the published package left out `bin/bootstrap-entry.js` and
+  `start-api.sh`, which every installer-written MCP config and the macOS LaunchAgent point at.
+  Both now ship; verified by a global install from the packed tarball, running the installer and
+  starting the configured MCP server.
+- Cloud server builds on Node 22 (`nixpacks.toml`, `engines`), since `sharp` needs Node 20.9+.
+
 ### Security
 - **Local API locked to local callers**: the REST API on `localhost:3747` now rejects any request
   whose `Host` is not localhost (closes DNS rebinding reads), any write from a foreign `Origin`

@@ -17,6 +17,8 @@ What Next is a persistent memory engine for developers. It learns from every ses
 
 **v2.1 - Self-Curating Memory:** The brain now reviews itself. A daily background loop scans your saved facts for near-duplicates using local embeddings (fully offline, no LLM API key, zero cost) and archives them non-destructively - the newest version survives, the older one keeps a `superseded_by` pointer and stays recoverable. Similar-but-not-identical facts are flagged for review, never auto-merged. Your context cards stay tight: no doubled facts, no stale noise. Run it on demand with the `curate_memory` tool (`dry_run: true` to preview) or `POST /curate`. Disable the daily run with `WHATNEXT_CURATOR=0`.
 
+**v2.2 - Hardened and self-syncing:** The local API now answers only this machine: it rejects foreign `Host` headers, cross-site writes and non-JSON writes, so no web page you visit can read or plant memory. Every local write is indexed for semantic search immediately, rows written while offline are pushed to the cloud on the next sync, and read tools answer from local SQLite first when `WHATNEXT_PREFER_LOCAL=1`.
+
 Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
 
 ---
@@ -409,7 +411,7 @@ curl "http://localhost:3747/flagged"
 If the local service is down:
 - macOS: `launchctl start com.whatnextai.api`
 - Windows: `node "$env:USERPROFILE\what-next\bin\local-api.js"`
-- Linux: `node ~/what-next/bin/local-api.js`
+- Linux: `systemctl --user enable --now what-next-api` (the installer writes the unit), or `node ~/what-next/bin/local-api.js`
 
 **macOS self-healing on boot:** The LaunchAgent runs `start-api.sh` on every login. If source code is missing it restores from GitHub; if node_modules are gone it runs `npm install`. What Next is resilient to accidental deletions.
 
@@ -445,6 +447,12 @@ sanitised first: markup that could impersonate the agent harness is escaped, and
 phrasing is flagged and left exactly as written. Nothing is ever dropped or silently edited. The
 files What Next generates say in one line that their contents are recalled data. `GET /flagged`
 lists any stored memory that tripped the check, so you can see what is in your own memory and why.
+
+**The local API only answers this machine.** It listens on 127.0.0.1, refuses requests whose `Host`
+is not localhost, and refuses writes from any other website's origin, so a page open in your browser
+cannot read or write your memory. Scripts that write to it must send `Content-Type: application/json`
+(the bundled skill, CLI, hooks and VS Code extension already do). The ChatGPT bookmarklet is the one
+allowed cross-site caller, and only for `/ingest`.
 
 ---
 

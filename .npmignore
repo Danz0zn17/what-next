@@ -5,14 +5,11 @@ data/
 .env*
 *.log
 .git/
-*.sh
 .claude/
 .github/
 netlify/
 netlify.toml
 railway.toml
 skills/
-bin/install.js
 bin/healthcheck.js
-bin/bootstrap-entry.js
-bin/start-api.sh
+
