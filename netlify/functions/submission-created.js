@@ -31,9 +31,10 @@ exports.handler = async (event) => {
       return { statusCode: 500, body: 'Server misconfiguration' };
     }
 
-    const response = await fetch(`${CLOUD_URL}/webhooks/beta-signup?secret=${encodeURIComponent(secret)}`, {
+    // Secret travels in a header, not the query string, so it stays out of proxy and access logs.
+    const response = await fetch(`${CLOUD_URL}/webhooks/beta-signup`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': secret },
       body: JSON.stringify({ name: name || email.split('@')[0], email }),
     });
 

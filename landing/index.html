@@ -420,6 +420,11 @@
       background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.16);
       border-radius: var(--r); font-size: 14px; color: #bbf7d0; line-height: 1.55; margin-top: 20px;
     }
+    .form-error {
+      display: none; padding: 16px 18px;
+      background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.16);
+      border-radius: var(--r); font-size: 14px; color: #fecaca; line-height: 1.55; margin-top: 20px;
+    }
 
     /* FOOTER */
     footer { padding: 36px 0; border-top: 1px solid var(--border); }
@@ -938,6 +943,9 @@
           <div class="form-success" id="form-success">
             You're in the queue. We'll reach out when we're ready for you. Thanks.
           </div>
+          <div class="form-error" id="form-error" role="alert">
+            Something went wrong and your request was not sent. Please try again in a moment.
+          </div>
         </form>
       </div>
     </div>
@@ -1101,14 +1109,21 @@
   var form    = document.getElementById('beta-form');
   var btn     = document.getElementById('submit-btn');
   var success = document.getElementById('form-success');
+  var failure = document.getElementById('form-error');
   if (!form) return;
+  var btnHtml = btn.innerHTML;
+  var inFlight = false;
   form.addEventListener('submit', function (e) {
     e.preventDefault();
+    if (inFlight) return;
     if (form.querySelector('[name="bot-field"]').value) return;
+    inFlight = true;
+    if (failure) failure.style.display = 'none';
     btn.textContent = 'Sending…'; btn.disabled = true;
     fetch('/', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(form)).toString() })
+    .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); })
     .then(function () { form.querySelector('.form-submit').style.display='none'; success.style.display='block'; })
-    .catch(function () { btn.textContent='Request access'; btn.disabled=false; });
+    .catch(function () { inFlight = false; btn.innerHTML = btnHtml; btn.disabled = false; if (failure) failure.style.display = 'block'; });
   });
 }());
 </script>
