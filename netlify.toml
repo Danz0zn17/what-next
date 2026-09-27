@@ -2,6 +2,11 @@
   publish = "landing"
   functions = "netlify/functions"
 
+# The landing page is static. Account-level extensions pull in puppeteer, whose
+# browser download fails the build; nothing here needs that browser.
+[build.environment]
+  PUPPETEER_SKIP_DOWNLOAD = "true"
+
 [[redirects]]
   from   = "/sitemap.xml"
   to     = "/sitemap.xml"
