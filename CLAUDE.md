@@ -33,7 +33,7 @@ What Next is Danny's persistent AI memory engine and MCP server product. Public 
 - MCP tools timeout after 15s (v1.3.0+) - all handlers must be fast
 - `dump_session` in Claude Code must be called directly as MCP tool, NOT via Agent tool or Bash curl
 - Smart Context Cards at `~/.whatnext/agents/{project}.md` - auto-generated, never manually edited
-- The what-next MCP server itself is NOT used here during development (avoid recursive MCP calls)
+- The MCP server runs from the separate runtime checkout (~/.whatnext/runtime), not this repo, so What Next tools are safe to use here; repo changes go live only after pulling the runtime
 
 ## This Is a Public Repo
 Changes pushed to main are visible to customers. README is customer-facing docs. Landing page is the product website. Always commit with clean, descriptive messages. Check CHANGELOG before pushing features.
