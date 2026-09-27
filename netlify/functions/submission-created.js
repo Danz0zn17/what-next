@@ -5,7 +5,7 @@
 
 const CLOUD_URL = 'https://what-next-production.up.railway.app';
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   try {
     const body = JSON.parse(event.body);
     const { payload } = body;
