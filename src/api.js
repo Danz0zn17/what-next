@@ -29,6 +29,7 @@ import { addSession, addFact, editSession, searchMemories, getProject, listProje
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { runCuration } from './curator.js';
+import { indexSession, indexFact } from './indexer.js';
 
 // Embeddings require native onnxruntime binaries and can be slow/dataless on
 // macOS boot. Load them only when semantic search is actually requested so the
@@ -172,6 +173,10 @@ const HTML_FORM = `<!DOCTYPE html>
       if (name === 'projects') loadProjects();
     }
 
+    function esc(v) {
+      return String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+    }
+
     function toast(id, msg, ok=true) {
       const el = document.getElementById(id);
       el.textContent = msg;
@@ -222,13 +227,13 @@ const HTML_FORM = `<!DOCTYPE html>
       if (!data.sessions.length && !data.facts.length) { el.innerHTML = '<p style="color:#666;margin-top:1rem">No results found.</p>'; return; }
       let html = '';
       for (const s of data.sessions) {
-        html += '<div class="result-card"><h4>' + s.project_name + '</h4><div class="meta">' + s.session_date + '</div><p>' + s.summary + '</p>';
-        if (s.stack) html += '<p style="margin-top:0.5rem;color:#888">Stack: ' + s.stack + '</p>';
-        if (s.tags) html += '<div style="margin-top:0.5rem">' + s.tags.split(',').map(t => '<span class="tag">' + t.trim() + '</span>').join('') + '</div>';
+        html += '<div class="result-card"><h4>' + esc(s.project_name) + '</h4><div class="meta">' + esc(s.session_date) + '</div><p>' + esc(s.summary) + '</p>';
+        if (s.stack) html += '<p style="margin-top:0.5rem;color:#888">Stack: ' + esc(s.stack) + '</p>';
+        if (s.tags) html += '<div style="margin-top:0.5rem">' + String(s.tags).split(',').map(t => '<span class="tag">' + esc(t.trim()) + '</span>').join('') + '</div>';
         html += '</div>';
       }
       for (const f of data.facts) {
-        html += '<div class="result-card"><h4>' + (f.project_name || 'Global') + ' — ' + f.category + '</h4><p>' + f.content + '</p></div>';
+        html += '<div class="result-card"><h4>' + esc(f.project_name || 'Global') + ' — ' + esc(f.category) + '</h4><p>' + esc(f.content) + '</p></div>';
       }
       el.innerHTML = html;
     }
@@ -239,7 +244,7 @@ const HTML_FORM = `<!DOCTYPE html>
       const el = document.getElementById('project-list');
       if (!data.length) { el.innerHTML = '<p style="color:#666">No projects yet.</p>'; return; }
       el.innerHTML = data.map(p =>
-        '<div class="project-card"><h3>' + p.name + '</h3><div class="meta">' + p.session_count + ' session(s) · last: ' + (p.last_session || 'never') + '</div>' + (p.description ? '<p style="font-size:0.85rem;color:#888;margin-top:0.3rem">' + p.description + '</p>' : '') + '</div>'
+        '<div class="project-card"><h3>' + esc(p.name) + '</h3><div class="meta">' + esc(p.session_count) + ' session(s) · last: ' + esc(p.last_session || 'never') + '</div>' + (p.description ? '<p style="font-size:0.85rem;color:#888;margin-top:0.3rem">' + esc(p.description) + '</p>' : '') + '</div>'
       ).join('');
     }
   </script>
@@ -472,8 +477,8 @@ function send(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    // Restrict to localhost only — api is local-only, no cross-origin needed
-    'Access-Control-Allow-Origin': 'http://localhost:3747',
+    // Restrict to localhost only; /ingest may pre-set a ChatGPT origin (see the request guard)
+    'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin') ?? `http://localhost:${PORT}`,
     'X-Content-Type-Options': 'nosniff',
   });
   res.end(payload);
@@ -485,31 +490,58 @@ function sendHtml(res, html) {
 }
 
 const MAX_BODY_BYTES = 64 * 1024; // 64KB
-function parseBody(req) {
+const MAX_IMPORT_BYTES = 50 * 1024 * 1024; // 50MB, a large ChatGPT export
+
+// Reads the body up to maxBytes. Beyond that it stops reading and rejects with
+// 413; the error handler answers and then destroys the request.
+function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    const chunks = [];
     let size = 0;
     req.on('data', chunk => {
-      size += Buffer.byteLength(chunk);
-      if (size > MAX_BODY_BYTES) {
-        req.destroy();
+      size += chunk.length;
+      if (size > maxBytes) {
+        req.removeAllListeners('data');
+        req.pause();
         reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
         return;
       }
-      raw += chunk;
+      chunks.push(chunk);
     });
-    req.on('end', () => {
-      try { resolve(JSON.parse(raw || '{}')); } catch { reject(Object.assign(new Error('Invalid JSON'), { statusCode: 400 })); }
-    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    req.on('error', reject);
   });
 }
 
+async function parseBody(req) {
+  const raw = await readBody(req, MAX_BODY_BYTES);
+  try { return JSON.parse(raw || '{}'); } catch { throw Object.assign(new Error('Invalid JSON'), { statusCode: 400 }); }
+}
+
 function parseRawBody(req) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-  });
+  return readBody(req, MAX_IMPORT_BYTES);
+}
+
+function clampLimit(value, fallback, max) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(n, max);
+}
+
+// Request guard (DNS rebinding + CSRF)
+const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+// The ChatGPT bookmarklet (SETUP_PAGE) posts to /ingest from these origins.
+const INGEST_ORIGINS = new Set(['https://chatgpt.com', 'https://chat.openai.com']);
+
+function allowedHosts() {
+  const hosts = [`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`];
+  if (String(PORT) === '80') hosts.push('localhost', '127.0.0.1', '[::1]');
+  return new Set(hosts);
+}
+
+function originAllowed(origin, pathname) {
+  if (LOCAL_ORIGIN.test(origin)) return true;
+  return pathname === '/ingest' && INGEST_ORIGINS.has(origin);
 }
 
 // ─── ChatGPT import logic (shared with import-chatgpt.js) ────────────────────
@@ -563,11 +595,12 @@ function importConversations(conversations) {
     const date = convo.create_time ? new Date(convo.create_time * 1000).toISOString().slice(0, 10) : 'unknown';
     if (!isWorthImporting(messages)) { skipped++; continue; }
     const dump = findDumpBlock(messages);
-    if (dump) { addSession(dump); fromDump++; imported++; continue; }
+    if (dump) { indexSession(addSession(dump), dump); fromDump++; imported++; continue; }
     const project = titleToProject(title);
     const firstUser = messages.find(m => m.role === 'user')?.text ?? '';
     const summary = `[Imported from ChatGPT] "${title}". Started with: ${firstUser.slice(0, 300).replace(/\n+/g, ' ').trim()}`;
-    addSession({ project, summary, stack: buildStack(messages), tags: `chatgpt-import,${date.slice(0, 7)}` });
+    const fields = { project, summary, stack: buildStack(messages), tags: `chatgpt-import,${date.slice(0, 7)}` };
+    indexSession(addSession(fields), fields);
     imported++;
   }
   return { total: conversations.length, imported, skipped, fromDump };
@@ -578,14 +611,36 @@ export function startApiServer() {
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const method = req.method;
+    const origin = req.headers.origin;
 
-    // CORS preflight — local-only (localhost origins only)
+    // DNS rebinding: only answer requests addressed to this machine by name
+    if (!allowedHosts().has(String(req.headers.host ?? '').toLowerCase())) {
+      return send(res, 403, { error: 'Forbidden host' });
+    }
+
+    // CORS preflight: localhost origins only, plus ChatGPT for /ingest
     if (method === 'OPTIONS') {
-      const origin = req.headers.origin ?? '';
-      const allowed = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : 'null';
-      res.writeHead(204, { 'Access-Control-Allow-Origin': allowed, 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS' });
+      const allowed = origin && originAllowed(origin, url.pathname) ? origin : 'null';
+      const headers = { 'Access-Control-Allow-Origin': allowed, 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS', 'Vary': 'Origin' };
+      if (allowed !== 'null' && req.headers['access-control-request-private-network'] === 'true') headers['Access-Control-Allow-Private-Network'] = 'true';
+      res.writeHead(204, headers);
       res.end();
       return;
+    }
+
+    // CSRF: writes must come from a local origin (or none, e.g. curl and hooks) and be JSON
+    if (method !== 'GET' && method !== 'HEAD') {
+      if (origin !== undefined && !originAllowed(origin, url.pathname)) {
+        return send(res, 403, { error: 'Forbidden origin' });
+      }
+      const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+      if (type !== 'application/json') {
+        return send(res, 415, { error: 'Content-Type must be application/json' });
+      }
+      if (origin && INGEST_ORIGINS.has(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+      }
     }
 
     try {
@@ -604,6 +659,7 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.project || !body.summary) return send(res, 400, { error: 'project and summary are required' });
         const id = addSession(body);
+        indexSession(id, body);
         if (cloud.isEnabled()) cloud.postSession(body).then(r => { if (r?.id) setSessionCloudId(id, r.id); }).catch(() => {});
         setImmediate(() => {
           try { writeSidecarForProject(body.project); } catch {}
@@ -619,6 +675,8 @@ export function startApiServer() {
         const body = await parseBody(req);
         const changed = editSession(id, body);
         if (!changed) return send(res, 404, { error: 'Session not found or nothing to update' });
+        const updated = getSessionById(id);
+        if (updated) indexSession(id, updated);
         return send(res, 200, { ok: true });
       }
 
@@ -627,6 +685,7 @@ export function startApiServer() {
         const body = await parseBody(req);
         if (!body.category || !body.content) return send(res, 400, { error: 'category and content are required' });
         const id = addFact(body);
+        indexFact(id, body);
         // Write-through to cloud (fire and forget), recording the cloud id on success
         if (cloud.isEnabled()) cloud.postFact(body).then(r => { if (r?.id) setFactCloudId(id, r.id); }).catch(() => {});
         return send(res, 201, { id, message: 'Fact stored' });
@@ -636,7 +695,7 @@ export function startApiServer() {
       if (method === 'GET' && url.pathname === '/search') {
         const q = url.searchParams.get('q');
         if (!q) return send(res, 400, { error: 'q parameter required' });
-        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
+        const limit = clampLimit(url.searchParams.get('limit'), 10, 50);
         const range = parseTimeRange(q);
         if (range) return send(res, 200, { ...searchMemories(range.text, limit, range), range: { since: range.since, until: range.until } });
         return send(res, 200, searchMemories(q, limit));
@@ -646,23 +705,28 @@ export function startApiServer() {
       if (method === 'GET' && url.pathname === '/hybrid-search') {
         const q = url.searchParams.get('q');
         if (!q) return send(res, 400, { error: 'q parameter required' });
-        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
+        const limit = clampLimit(url.searchParams.get('limit'), 10, 50);
 
         // FTS5 results (ranked list of session IDs)
         let ftsRows = [];
         try { ftsRows = searchMemories(q, limit * 2).sessions; } catch {}
 
-        // Semantic results (cosine similarity against all embeddings)
+        // Semantic results (cosine similarity against all embeddings); FTS only if embeddings fail
         let semRows = [];
         const embMod = await loadEmbeddings();
         if (embMod?.generateEmbedding && embMod?.cosineSimilarity) {
-          const { generateEmbedding, cosineSimilarity } = embMod;
-          const queryEmb = await generateEmbedding(q);
-          const allEmbs = getAllEmbeddings().filter(e => e.rowtype === 'session');
-          semRows = allEmbs
-            .map(e => ({ id: e.row_id, score: cosineSimilarity(queryEmb, e.embedding) }))
-            .sort((a, b) => b.score - a.score)
-            .slice(0, limit * 2);
+          try {
+            const { generateEmbedding, cosineSimilarity } = embMod;
+            const queryEmb = await generateEmbedding(q);
+            const allEmbs = getAllEmbeddings().filter(e => e.rowtype === 'session');
+            semRows = allEmbs
+              .map(e => ({ id: e.row_id, score: cosineSimilarity(queryEmb, e.embedding) }))
+              .sort((a, b) => b.score - a.score)
+              .slice(0, limit * 2);
+          } catch (err) {
+            process.stderr.write(`[api] hybrid-search semantic leg failed, using FTS only: ${err.message}\n`);
+            semRows = [];
+          }
         }
 
         // Reciprocal Rank Fusion
@@ -685,7 +749,7 @@ export function startApiServer() {
 
       // GET /whats-next — open next_steps per project
       if (method === 'GET' && url.pathname === '/whats-next') {
-        const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '8', 10), 20);
+        const limit = clampLimit(url.searchParams.get('limit'), 8, 20);
         return send(res, 200, { items: getWhatsNext(limit) });
       }
 
@@ -726,7 +790,7 @@ export function startApiServer() {
         const { generateEmbedding, cosineSimilarity } = embMod;
         const body = await parseBody(req);
         if (!body.query) return send(res, 400, { error: 'query field required' });
-        const limit = body.limit ?? 10;
+        const limit = clampLimit(body.limit, 10, 50);
         const queryEmbedding = await generateEmbedding(body.query);
         const allEmbeddings = getAllEmbeddings();
         const scored = allEmbeddings.map(({ rowtype, row_id, embedding }) => ({
@@ -750,6 +814,7 @@ export function startApiServer() {
         const parsed = parseAgentDump(body.raw);
         if (!parsed) return send(res, 400, { error: 'Could not find a WHAT NEXT DUMP block in the text' });
         const id = addSession(parsed);
+        indexSession(id, parsed);
         return send(res, 201, { id, message: 'Session ingested', project: parsed.project });
       }
 
@@ -845,7 +910,9 @@ export function startApiServer() {
 
       send(res, 404, { error: 'Not found' });
     } catch (err) {
-      send(res, 500, { error: err.message });
+      const status = err.statusCode ?? 500;
+      if (status === 413) res.on('finish', () => req.destroy());
+      send(res, status, { error: err.message });
     }
   });
 

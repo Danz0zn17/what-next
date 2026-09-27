@@ -21,10 +21,11 @@
 import { createInterface } from 'readline';
 import { spawnSync } from 'child_process';
 import { basename } from 'path';
+import { readFileSync } from 'fs';
 
 const BASE = 'http://localhost:3747';
 const PORT = 3747;
-const VERSION = '1.5.1';
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
 const c = {
@@ -116,7 +117,7 @@ async function cmdContext() {
   const { ok, data } = await get('/context');
   if (!ok) { console.error(col('red', 'Failed to fetch context.'), data); process.exit(1); }
 
-  const sessions = data.sessions ?? [];
+  const sessions = data.recent_sessions ?? data.sessions ?? [];
   const facts    = data.facts    ?? [];
 
   console.log(`\n${bold('=== What Next — Full Context ===')}`);
@@ -235,7 +236,7 @@ async function cmdDump() {
 async function cmdFact(content) {
   if (content) {
     // wn fact "some content" — non-interactive
-    const { ok, data } = await post('/fact', { content });
+    const { ok, data } = await post('/fact', { category: 'general', content });
     if (ok) { console.log(col('green', `\n✓ Fact stored\n`)); }
     else { console.error(col('red', 'Failed to store fact.'), data); process.exit(1); }
     return;
@@ -244,12 +245,11 @@ async function cmdFact(content) {
   console.log(`\n${bold('=== Add Fact to What Next ===')}`);;
 
   const factContent = await prompt(bold('Content: '), true);
-  const category    = await prompt(dim('Category (optional, e.g. preference, lesson): '));
+  const category    = await prompt(dim('Category [general] (e.g. preference, lesson): ')) || 'general';
   const project     = await prompt(dim('Project (leave blank for global): '));
   const tags        = await prompt(dim('Tags (comma-separated): '));
 
-  const body = { content: factContent };
-  if (category) body.category = category;
+  const body = { category, content: factContent };
   if (project)  body.project  = project;
   if (tags)     body.tags     = tags;
 
@@ -287,13 +287,15 @@ async function cmdStatus() {
 
 async function cmdOpen() {
   const url = `http://localhost:${PORT}`;
-  try {
-    const platform = process.platform;
-    const openCmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
-    spawnSync(openCmd, [url], { stdio: 'ignore' });
-    console.log(dim(`  Opened ${url}\n`));
-  } catch {
+  const platform = process.platform;
+  // `start` is a cmd.exe builtin; the empty first arg is its window title
+  const result = platform === 'win32'
+    ? spawnSync('start', ['""', url], { stdio: 'ignore', shell: true })
+    : spawnSync(platform === 'darwin' ? 'open' : 'xdg-open', [url], { stdio: 'ignore' });
+  if (result.error || result.status !== 0) {
     console.log(`  Open manually: ${col('cyan', url)}\n`);
+  } else {
+    console.log(dim(`  Opened ${url}\n`));
   }
 }
 
@@ -343,7 +345,7 @@ switch (cmd) {
   case 'project':  await cmdProject(rest[0]);     break;
   case 'search':   await cmdSearch(rest.join(' ')); break;
   case 'dump':     await cmdDump();               break;
-  case 'fact':     await cmdFact();               break;
+  case 'fact':     await cmdFact(rest.join(' ')); break;
   case 'status':   await cmdStatus();             break;
   case 'open':     await cmdOpen();               break;
   case 'install':  cmdInstall(rest);              break;

@@ -39,16 +39,19 @@ if (!existsSync(DB_PATH)) {
   }
 }
 
-import { startApiServer } from './api.js';
-import { startPeriodicSync } from './sync.js';
-import { checkForUpdate } from '../bin/update-check.js';
-import { startGitWatcher } from './watcher.js';
-import { startPeriodicCuration } from './curator.js';
+// Imported after the check: db.js opens (and creates) the DB when it loads,
+// so static imports would run before the check above could see a missing file.
+const { startApiServer } = await import('./api.js');
+const { startPeriodicSync } = await import('./sync.js');
+const { checkForUpdate } = await import('../bin/update-check.js');
+const { startGitWatcher } = await import('./watcher.js');
+const { startPeriodicCuration } = await import('./curator.js');
 
 startApiServer();
 startPeriodicSync();
 startGitWatcher();
 startPeriodicCuration();
 
-// Non-blocking update check — shows once per session via flag file dedup
-checkForUpdate().catch(() => {});
+// Non-blocking update check - shows once per session via flag file dedup.
+// WHATNEXT_UPDATE_CHECK=0 skips it (offline use and tests).
+if (process.env.WHATNEXT_UPDATE_CHECK !== '0') checkForUpdate().catch(() => {});
