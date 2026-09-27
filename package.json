@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "main": "src/server.js",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "bin": {
     "install-what-next": "bin/install.js",
     "wn": "bin/wn.js"
