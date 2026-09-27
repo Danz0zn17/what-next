@@ -23,8 +23,8 @@ import { spawnSync } from 'child_process';
 import { basename } from 'path';
 import { readFileSync } from 'fs';
 
-const BASE = 'http://localhost:3747';
-const PORT = 3747;
+const PORT = Number(process.env.WHATNEXT_PORT) || 3747;
+const BASE = `http://localhost:${PORT}`;
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
@@ -268,7 +268,7 @@ async function cmdStatus() {
   // Local
   const local = await get('/health').catch(() => null);
   if (local?.ok) {
-    console.log(col('green', '  ✓ Local API') + dim('  localhost:3747'));
+    console.log(col('green', '  ✓ Local API') + dim(`  localhost:${PORT}`));
   } else {
     console.log(col('red', '  ✗ Local API down') + dim(`  start: launchctl start com.whatnextai.api`));
   }
@@ -308,7 +308,7 @@ function cmdInstall(args) {
 
 function printHelp() {
   console.log(`
-${bold('wn')} — What Next CLI  ${dim('(localhost:3747)')}
+${bold('wn')} — What Next CLI  ${dim(`(localhost:${PORT})`)}
 
 ${bold('Commands:')}
   ${col('cyan', 'wn context')}                     Full context: recent sessions + facts

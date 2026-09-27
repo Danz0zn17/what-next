@@ -121,6 +121,7 @@ test('plist escapes paths and key for XML', () => {
   assert.ok(xml.includes('<string>/Users/a&amp;b/&lt;x&gt;/start-api.sh</string>'));
   assert.ok(xml.includes('<string>/r&amp;&lt;</string>'));
   assert.ok(xml.includes('<string>bak_&lt;&amp;&gt;</string>'));
+  assert.ok(xml.includes('<key>WHATNEXT_NODE</key>'), 'plist pins the installing node so native modules load');
   assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(xml));
 });
 

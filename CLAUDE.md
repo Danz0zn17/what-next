@@ -43,6 +43,7 @@ Changes pushed to main are visible to customers. README is customer-facing docs.
 - Always commit with --no-verify (run tsc + eslint manually first)
 - Version in package.json and McpServer version field must match before tagging
 - CHANGELOG.md must be updated before any version bump
+- Before `npm publish`: `bash scripts/customer-e2e.sh` must end with `RESULT: 0 failure(s)` (packs, installs and runs the real tarball in a sandbox)
 
 ## Templates
 - Design standards: `~/.claude/templates/design-standards.md` (for landing page work)

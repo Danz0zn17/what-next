@@ -17,3 +17,4 @@ bin/healthcheck.js
 *.tgz
 CLAUDE.md
 nixpacks.toml
+scripts/

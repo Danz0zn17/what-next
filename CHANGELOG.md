@@ -15,6 +15,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Both now ship; verified by a global install from the packed tarball, running the installer and
   starting the configured MCP server.
 - Cloud server builds on Node 22 (`nixpacks.toml`, `engines`), since `sharp` needs Node 20.9+.
+- **macOS LaunchAgent starts on customer machines**: `start-api.sh` had one machine's home directory
+  and Homebrew node path hard-coded, so the local API never started elsewhere. It now runs from its own
+  directory, and the installer pins the node that installed What Next (`WHATNEXT_NODE`) so native
+  modules load even when a different node is first on PATH.
+- `wn` honours `WHATNEXT_PORT`.
+- `scripts/customer-e2e.sh` packs, installs and runs the real npm tarball in a sandbox; required before publish.
 
 ### Security
 - **Local API locked to local callers**: the REST API on `localhost:3747` now rejects any request

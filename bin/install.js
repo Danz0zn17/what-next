@@ -178,7 +178,7 @@ export function xmlEscape(value) {
     .replace(/'/g, '&apos;');
 }
 
-export function buildPlist({ programArgs, logsDir, root, home, cloudUrl, key }) {
+export function buildPlist({ programArgs, logsDir, root, home, cloudUrl, key, nodeExec = process.execPath }) {
   const x = xmlEscape;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -214,6 +214,8 @@ ${programArgs.map(a => `        <string>${x(a)}</string>`).join('\n')}
         <string>${x(home)}</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>WHATNEXT_NODE</key>
+        <string>${x(nodeExec)}</string>
         <key>WHATNEXT_CLOUD_URL</key>
         <string>${x(cloudUrl)}</string>
         <key>WHATNEXT_API_KEY</key>
