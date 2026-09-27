@@ -18,6 +18,7 @@ export class CloudUnavailableError extends Error {
 }
 
 const TIMEOUT_MS = 8_000;
+const FULL_EXPORT_TIMEOUT_MS = 60_000;
 
 function cloudConfig() {
   const url = process.env.WHATNEXT_CLOUD_URL;
@@ -25,10 +26,27 @@ function cloudConfig() {
   return { url, key, enabled: !!(url && key) };
 }
 
-async function fetchCloud(path, options = {}) {
+// Node's fetch (undici) reports network failures as TypeError('fetch failed')
+// with the real code on err.cause, and a body cut off mid-read as
+// TypeError('terminated'). Timeouts surface as AbortError or TimeoutError.
+const NETWORK_CODES = new Set([
+  'ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EHOSTUNREACH',
+  'ENETUNREACH', 'ENETDOWN', 'EPIPE', 'ECONNABORTED',
+]);
+
+export function isNetworkError(err) {
+  if (!err) return false;
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+  const codes = [err.code, err.cause?.code];
+  if (codes.some(c => typeof c === 'string' && (NETWORK_CODES.has(c) || c.startsWith('UND_ERR_')))) return true;
+  if (err.cause?.name === 'AbortError' || err.cause?.name === 'TimeoutError') return true;
+  return err instanceof TypeError && (err.message === 'fetch failed' || err.message === 'terminated');
+}
+
+async function fetchCloud(path, { timeoutMs = TIMEOUT_MS, ...options } = {}) {
   const { url, key } = cloudConfig();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(`${url}${path}`, {
@@ -54,8 +72,9 @@ async function fetchCloud(path, options = {}) {
 
     return body;
   } catch (err) {
-    if (err.name === 'AbortError' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.name === 'CloudUnavailableError') {
-      throw new CloudUnavailableError(`Cloud unreachable: ${err.message}`);
+    if (err instanceof CloudUnavailableError) throw err;
+    if (isNetworkError(err)) {
+      throw new CloudUnavailableError(`Cloud unreachable: ${err.cause?.code ?? err.code ?? err.message}`);
     }
     throw err;
   } finally {
@@ -123,7 +142,8 @@ export async function semanticSearch(q, limit = 5) {
 
 export async function exportSince(since) {
   const param = since ? `?since=${encodeURIComponent(since)}` : '';
-  return fetchCloud(`/export${param}`);
+  // A full export (no cursor) can be large; give it longer than a normal call.
+  return fetchCloud(`/export${param}`, since ? {} : { timeoutMs: FULL_EXPORT_TIMEOUT_MS });
 }
 
 export async function editSession(id, updates) {

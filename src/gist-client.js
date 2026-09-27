@@ -7,10 +7,25 @@
  *
  * Requires: GITHUB_TOKEN env var (fine-grained PAT with Gist write permission)
  */
-import { storePendingGist, getPendingGists, deletePendingGist } from './db.js';
+import db, { storePendingGist, getPendingGists, deletePendingGist, setSessionCloudId } from './db.js';
 import * as cloud from './cloud-client.js';
+import { sanitizeFields, SESSION_TEXT_FIELDS } from './sanitize.js';
 
 const GIST_API = 'https://api.github.com/gists';
+const GITHUB_TIMEOUT_MS = 10_000;
+
+// The local row a gist payload was dumped from (same project and summary,
+// compared after the same sanitise pass the local write went through).
+// Rows that already carry a cloud id sort first.
+export function findLocalTwin(payload) {
+  if (!payload?.project || !payload?.summary) return null;
+  const { values } = sanitizeFields({ summary: payload.summary }, SESSION_TEXT_FIELDS);
+  return db.prepare(`
+    SELECT s.id, s.cloud_id FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE p.name = ? AND s.summary = ?
+    ORDER BY (s.cloud_id IS NULL) ASC, s.id ASC LIMIT 1
+  `).get(payload.project, values.summary) ?? null;
+}
 
 function githubToken() {
   return process.env.GITHUB_TOKEN;
@@ -37,6 +52,7 @@ export async function dumpToGist(sessionData) {
         'Content-Type': 'application/json',
         'X-GitHub-Api-Version': '2022-11-28',
       },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
       body: JSON.stringify({
         description: `What Next fallback — ${sessionData.project} — ${timestamp}`,
         public: false,
@@ -75,7 +91,14 @@ export async function syncPending() {
   for (const row of pending) {
     try {
       const payload = JSON.parse(row.payload);
-      await cloud.postSession(payload);
+      const twin = findLocalTwin(payload);
+      if (twin?.cloud_id) {
+        // Already reached the cloud (write-through retry or the sync push step).
+        console.error(`[gist] Session already in cloud, dropping gist: ${row.gist_id}`);
+      } else {
+        const res = await cloud.postSession(payload);
+        if (twin && res?.id) setSessionCloudId(twin.id, res.id);
+      }
       deletePendingGist(row.id);
 
       // Delete gist from GitHub (cleanup)
@@ -86,12 +109,15 @@ export async function syncPending() {
             Authorization: `Bearer ${token}`,
             'X-GitHub-Api-Version': '2022-11-28',
           },
+          signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
         }).catch(() => {});
       }
 
       console.error(`[gist] Synced and deleted gist: ${row.gist_id}`);
     } catch (err) {
       console.error(`[gist] Failed to sync gist ${row.gist_id}:`, err.message);
+      // Cloud went away mid-flush: stop instead of waiting out a timeout per row.
+      if (err instanceof cloud.CloudUnavailableError) break;
     }
   }
 }
