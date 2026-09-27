@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end customer path from the real npm tarball, fully sandboxed. Run before every npm publish:
-#   bash scripts/customer-e2e.sh
+#   bash scripts/customer-e2e.sh                  (tests the repo as it would publish)
+#   bash scripts/customer-e2e.sh whatnext-ai@2.2.0 (tests a version already on npm)
 # Packs the repo, installs the tarball into a temp prefix, runs the installer under a temp HOME
 # (launchctl is shimmed so the real com.whatnextai.api job is never touched), starts the API exactly
 # as the generated LaunchAgent would on a spare port, then exercises the REST API, wn and the MCP server.
@@ -15,7 +16,7 @@ bad() { printf '  FAIL  %s\n' "$1"; FAILS=$((FAILS+1)); }
 FAILS=0
 
 echo "== pack + install"
-(cd "$REPO" && npm pack --pack-destination "$S" >/dev/null 2>&1)
+if [ -n "${1:-}" ]; then (cd "$S" && npm pack "$1" >/dev/null 2>&1); echo "  testing published $1"; else (cd "$REPO" && npm pack --pack-destination "$S" >/dev/null 2>&1); fi
 TGZ=$(ls "$S"/whatnext-ai-*.tgz)
 N=$(tar -tzf "$TGZ" | wc -l | tr -d ' ')
 [ "$N" -lt 60 ] && ok "tarball has $N files ($(du -k "$TGZ" | cut -f1) KB)" || bad "tarball has $N files"
