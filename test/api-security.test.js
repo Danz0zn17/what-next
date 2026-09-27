@@ -73,9 +73,15 @@ before(async () => {
   throw new Error(`api-server did not start:\n${stderr}`);
 });
 
-after(() => {
-  child?.kill('SIGKILL');
-  if (dir) rmSync(dir, { recursive: true, force: true });
+after(async () => {
+  // Wait for the server to exit before removing its data dir: on Windows the
+  // open SQLite file keeps the directory locked (EBUSY) until the process is gone.
+  if (child && child.exitCode === null) {
+    const exited = new Promise((resolve) => child.once('exit', resolve));
+    child.kill('SIGKILL');
+    await exited;
+  }
+  if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 const json = { 'Content-Type': 'application/json' };
