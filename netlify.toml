@@ -2,10 +2,11 @@
   publish = "landing"
   functions = "netlify/functions"
 
-# The landing page is static. Account-level extensions pull in puppeteer, whose
-# browser download fails the build; nothing here needs that browser.
+# The landing page and the signup function need none of the root package.json
+# dependencies (native modules for the MCP server). Skip Netlify's automatic
+# npm install, which fails on them and kills the build before it starts.
 [build.environment]
-  PUPPETEER_SKIP_DOWNLOAD = "true"
+  NPM_FLAGS = "--dry-run"
 
 [[redirects]]
   from   = "/sitemap.xml"
