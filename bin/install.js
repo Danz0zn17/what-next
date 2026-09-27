@@ -21,7 +21,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, realpathSync, chmodSync } from 'fs';
 import { execFileSync, spawnSync } from 'child_process';
-import { basename, dirname, join, resolve } from 'path';
+import { basename, dirname, join, resolve, posix } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { fileURLToPath } from 'url';
@@ -257,7 +257,7 @@ export function buildSystemdUnit({ nodeExec, root, cloudUrl, key }) {
     '',
     '[Service]',
     'Type=simple',
-    `ExecStart=${q(nodeExec)} ${q(join(root, 'bin', 'local-api.js'))}`,
+    `ExecStart=${q(nodeExec)} ${q(posix.join(root, 'bin', 'local-api.js'))}`,
     `WorkingDirectory=${root.replace(/%/g, '%%')}`,
     ...Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}`),
     'Restart=on-failure',
