@@ -94,5 +94,5 @@ test('unchanged content is not rewritten', () => {
   const t = new Date(Date.now() - 60_000);
   utimesSync(FILE, t, t);
   assert.equal(writeCopilotInstructions(), 'unchanged');
-  assert.equal(statSync(FILE).mtimeMs, t.getTime());
+  assert.ok(Math.abs(statSync(FILE).mtimeMs - t.getTime()) < 1, 'unchanged content not rewritten');
 });

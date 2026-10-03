@@ -112,7 +112,7 @@ test('cursor rules: pointer only, no card content, unchanged content not rewritt
   const before = statSync(join(repo, '.cursorrules')).mtimeMs;
   const t = new Date(Date.now() - 60_000); utimesSync(join(repo, '.cursorrules'), t, t);
   writeSidecarForProject('cr');
-  assert.equal(statSync(join(repo, '.cursorrules')).mtimeMs, t.getTime(), 'unchanged block not rewritten');
+  assert.ok(Math.abs(statSync(join(repo, '.cursorrules')).mtimeMs - t.getTime()) < 1, 'unchanged block not rewritten');
   assert.ok(before > 0);
   assert.equal((readFileSync(join(repo, '.cursorrules'), 'utf8').match(/Auto-managed block/g) || []).length, 1);
 });

@@ -106,8 +106,10 @@ after(async () => {
     child.kill('SIGKILL');
     await exited;
   }
+  // This process still holds UNIT_HOME's SQLite file open, and Windows cannot
+  // delete an open file: cleanup is best-effort there.
   for (const d of [dir, UNIT_HOME]) {
-    if (d) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    try { if (d) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch (e) { if (process.platform !== 'win32') throw e; }
   }
 });
 

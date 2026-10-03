@@ -12,8 +12,8 @@
 
 import { spawn, spawnSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, renameSync } from 'fs';
-import { tmpdir, userInfo } from 'os';
-import { join, basename, dirname, resolve } from 'path';
+import { tmpdir, userInfo, homedir } from 'os';
+import { join, basename, dirname, resolve, isAbsolute } from 'path';
 
 export const TARGETS = ['env', 'netlify', 'railway', 'vercel', 'supabase', 'github', 'keychain'];
 export const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -344,10 +344,10 @@ const SAFE_ENV_FILE = /\.(example|sample|template|dist|defaults)$/i;
 const ENV_NAME = String.raw`\.(?:env(?:\.[\w.*-]+)?|envrc|dev\.vars(?:\.[\w.-]+)?)`;
 const ENV_FILE = new RegExp(String.raw`(^|[\s/'"=<])${ENV_NAME}\*?(?=$|[\s'";|&)>*])`, 'g');
 const ENV_BASENAME = new RegExp(String.raw`^${ENV_NAME}$`);
-const AGENT_CONFIG = /(mcp\.json|mcp_config\.json|claude_desktop_config\.json|\.claude\.json|\.codex\/config\.toml)$/;
-const AGENT_CONFIG_IN_CMD = /[^\s'"]*(mcp\.json|mcp_config\.json|claude_desktop_config\.json|\.claude\.json|\.codex\/config\.toml)(?=$|[\s'";|&)>])/g;
-const CRED_FILE = /(^|[\s/'"])(\.aws\/credentials|\.netrc|_netrc|\.pgpass|\.git-credentials)(?=$|[\s'";|&)>])/;
-const NPMRC = /(^|\/)\.npmrc$/;
+const AGENT_CONFIG = /(mcp\.json|mcp_config\.json|claude_desktop_config\.json|\.claude\.json|\.codex[\\/]config\.toml)$/;
+const AGENT_CONFIG_IN_CMD = /[^\s'"]*(mcp\.json|mcp_config\.json|claude_desktop_config\.json|\.claude\.json|\.codex[\\/]config\.toml)(?=$|[\s'";|&)>])/g;
+const CRED_FILE = /(^|[\s/\\'"])(\.aws[\\/]credentials|\.netrc|_netrc|\.pgpass|\.git-credentials)(?=$|[\s'";|&)>])/;
+const NPMRC = /(^|[\\/])\.npmrc$/;
 const NPMRC_IN_CMD = /[^\s'"]*\.npmrc(?=$|[\s'";|&)>])/g;
 const SECRET_VALUE = /\b(bak_|sk-|sk_live_|sk_test_|rk_live_|ghp_|gho_|github_pat_|xox[abp]-|glpat-|npm_|AKIA|eyJ)[A-Za-z0-9_-]{12,}|["']?[A-Za-z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?[^"'\s,{}$]{12,}|^\s*_auth\s*=\s*\S{12,}/im;
 
@@ -490,9 +490,10 @@ export function fileHasSecrets(path) {
 }
 
 function resolveFrom(cwd, p) {
-  const home = process.env.HOME ?? '';
-  const expanded = p.replace(/^~(?=\/)/, home).replace(/^\$\{?HOME\}?(?=\/)/, home);
-  return expanded.startsWith('/') ? expanded : join(cwd ?? process.cwd(), expanded);
+  const home = process.env.HOME || homedir();
+  const expanded = p.replace(/^~(?=[\\/])/, home).replace(/^\$\{?HOME\}?(?=[\\/])/, home);
+  // isAbsolute, not a leading "/": Windows paths start with a drive letter
+  return isAbsolute(expanded) ? expanded : resolve(cwd ?? process.cwd(), expanded);
 }
 
 /** Returns a reason string when the tool call would expose a secret, else null. */
