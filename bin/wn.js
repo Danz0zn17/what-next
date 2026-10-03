@@ -317,7 +317,7 @@ async function cmdSecret(args) {
     opts = parseSecretArgs(args);
   } catch (e) {
     console.error(col('red', `\n${e.message}`));
-    console.error(dim(`  Usage: wn secret NAME [--to ${TARGETS.join(',')}] [--url <where to get it>] [--env-file .env] [--check]\n`));
+    console.error(dim(`  Usage: wn secret NAME [--to ${TARGETS.join(',')}] [--url <where to get it>] [--env-file .env] [--timeout 110] [--check]\n`));
     process.exit(1);
   }
   if (opts.check) process.exit(checkSecret(opts));
