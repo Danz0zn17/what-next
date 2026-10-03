@@ -21,7 +21,7 @@
 import { createInterface } from 'readline';
 import { spawnSync } from 'child_process';
 import { basename } from 'path';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -340,7 +340,11 @@ async function cmdGuard(args) {
       process.exit(1);
     }
   }
-  const command = `"${process.execPath}" "${fileURLToPath(import.meta.url)}" guard`;
+  // Prefer a PATH entry (e.g. /opt/homebrew/bin/node) over a versioned path that breaks on upgrade
+  const onPath = (spawnSync('which', ['-a', 'node'], { encoding: 'utf8' }).stdout ?? '').split('\n').filter(Boolean);
+  const same = (p) => { try { return realpathSync(p) === realpathSync(process.execPath); } catch { return false; } };
+  const nodeExec = onPath.find(same) ?? process.execPath;
+  const command = `"${nodeExec}" "${fileURLToPath(import.meta.url)}" guard`;
   mkdirSync(dirname(settingsPath), { recursive: true });
   const backup = backupFile(settingsPath);
   writeFileSync(settingsPath, JSON.stringify(addGuardHook(settings, command), null, 2) + '\n');
