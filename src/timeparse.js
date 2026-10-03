@@ -17,6 +17,13 @@ const addDays = (d, n) => new Date(d.getTime() + n * UNIT_MS.day);
 const monthStart = (y, m) => new Date(Date.UTC(y, m, 1));
 const monthIndex = s => MONTHS.findIndex(m => m.startsWith(s.slice(0, 3).toLowerCase()));
 
+// Full month names or their exact abbreviations, as whole words: "decisions",
+// "marketing" and "junit" are not months. Longest alternatives first.
+const MONTH = '(january|february|march|april|june|july|august|september|october|november|december|sept|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)';
+// "may" is also an ordinary word ("we may need"), so it only counts as a month
+// next to a year or straight after in/during/last.
+const MONTH_OR_MAY = MONTH.replace('(', '(may|');
+
 // Each pattern: regex, then a function (match, now) -> [start, end) as Dates.
 const PATTERNS = [
   // "since <date>" must win over the bare ISO-date pattern below
@@ -26,14 +33,16 @@ const PATTERNS = [
     return [d, addDays(d, 1)];
   }],
   [/\b(\d{4})-(\d{2})\b/, (m) => [monthStart(+m[1], +m[2] - 1), monthStart(+m[1], +m[2])]],
-  [/\b(?:in\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{4})\b/i, (m) => {
+  [new RegExp(`\\b(?:in\\s+)?${MONTH_OR_MAY}\\.?\\s+(\\d{4})\\b`, 'i'), (m) => {
     const mi = monthIndex(m[1]);
     return [monthStart(+m[2], mi), monthStart(+m[2], mi + 1)];
   }],
-  [/\b(?:in|during|from)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/i, (m, now) => {
+  [new RegExp(`\\b(?:(?:in|during|from|last)\\s+${MONTH}|(?:in|during|last)\\s+(may))\\b(?![-'])`, 'i'), (m, now) => {
+    m[1] = m[1] ?? m[2];
     const mi = monthIndex(m[1]);
     let y = now.getUTCFullYear();
-    if (mi > now.getUTCMonth()) y -= 1; // most recent occurrence, never the future
+    // Most recent occurrence, never the future; "last <month>" also skips the current month.
+    if (mi > now.getUTCMonth() || (mi === now.getUTCMonth() && /^last/i.test(m[0]))) y -= 1;
     return [monthStart(y, mi), monthStart(y, mi + 1)];
   }],
   [/\btoday\b/i, (m, now) => [startOfDay(now), addDays(startOfDay(now), 1)]],

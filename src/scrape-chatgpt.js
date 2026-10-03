@@ -1,53 +1,37 @@
 /**
- * What Next — ChatGPT Scraper
+ * What Next - ChatGPT Scraper
  *
  * Opens Chrome, waits for you to log in, then scrapes all conversations
  * in the SAME browser session and imports them into What Next.
  * No session files, no handoffs, no expiry issues.
  *
  * Usage:
- *   node src/scrape-chatgpt.js
- *   node src/scrape-chatgpt.js --dry-run
+ *   node src/scrape-chatgpt.js --login            log in and confirm access, import nothing
+ *   node src/scrape-chatgpt.js [--scrape]         log in, then scrape and import
+ *   node src/scrape-chatgpt.js --scrape --dry-run count what would be imported
+ *
+ * Sessions keep each conversation's date, conversations already imported are
+ * skipped, and nothing is written inside the package install dir.
  */
 
 import { chromium } from 'playwright';
-import { mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { importConversation } from './import-chatgpt.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data');
-const WHATNEXT_API = 'http://localhost:3747';
-const DRY_RUN = process.argv.includes('--dry-run');
-
-mkdirSync(DATA_DIR, { recursive: true });
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function titleToProject(title) {
-  return (title ?? 'unknown')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .slice(0, 50) || 'chatgpt-import';
+const KNOWN_FLAGS = new Set(['--login', '--scrape', '--dry-run']);
+const args = process.argv.slice(2);
+const unknown = args.filter(a => !KNOWN_FLAGS.has(a));
+if (unknown.length || (args.includes('--login') && args.includes('--scrape'))) {
+  console.error('Usage: node src/scrape-chatgpt.js [--login | --scrape] [--dry-run]');
+  process.exit(1);
 }
-
-function detectStack(text) {
-  const known = ['react','next.js','nextjs','vue','svelte','angular','node','express',
-    'fastapi','django','flask','typescript','javascript','python','rust','go',
-    'supabase','firebase','postgresql','mongodb','mysql','sqlite','prisma','redis',
-    'tailwind','docker','aws','vercel','stripe','openai','anthropic','playwright','graphql'];
-  return known.filter(t => text.toLowerCase().includes(t)).join(', ') || undefined;
-}
-
-function isWorthImporting(messages) {
-  return messages.filter(m => m.role === 'assistant').map(m => m.content).join(' ').split(/\s+/).length > 80;
-}
+const LOGIN_ONLY = args.includes('--login');
+const DRY_RUN = args.includes('--dry-run');
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function run() {
-  console.log('\n🔵 What Next — ChatGPT Scraper\n');
-  if (DRY_RUN) console.log('  DRY RUN — nothing will be imported\n');
+  console.log('\nWhat Next - ChatGPT Scraper\n');
+  if (LOGIN_ONLY) console.log('  LOGIN ONLY - checks access, nothing will be imported\n');
+  else if (DRY_RUN) console.log('  DRY RUN - nothing will be imported\n');
 
   // Open real Chrome with stealth flags
   const browser = await chromium.launch({
@@ -87,12 +71,18 @@ async function run() {
   }
 
   if (!loggedIn) {
-    console.log('\n❌ Login not detected. Closing.');
+    console.log('\n  Login not detected. Closing.');
     await browser.close();
     process.exit(1);
   }
 
-  console.log('\n✅ Logged in! Starting scrape...\n');
+  if (LOGIN_ONLY) {
+    console.log('\n  Logged in and the conversations API answers. Run with --scrape to import.\n');
+    await browser.close();
+    return;
+  }
+
+  console.log('\n  Logged in. Starting scrape...\n');
 
   // Fetch all conversations (paginated)
   const allConversations = [];
@@ -116,12 +106,12 @@ async function run() {
 
   console.log(`\n  Total conversations: ${allConversations.length}\n`);
 
-  // Fetch and import each conversation
-  let imported = 0, skipped = 0, errors = 0;
+  // Fetch and import each conversation, one at a time
+  let imported = 0, skipped = 0, duplicates = 0, errors = 0;
 
   for (let i = 0; i < allConversations.length; i++) {
     const convo = allConversations[i];
-    process.stdout.write(`\r  ${i + 1}/${allConversations.length} — imported: ${imported}, skipped: ${skipped}...`);
+    process.stdout.write(`\r  ${i + 1}/${allConversations.length} - imported: ${imported}, skipped: ${skipped}, already there: ${duplicates}...`);
 
     try {
       const detail = await page.evaluate(async (id) => {
@@ -136,34 +126,21 @@ async function run() {
         .filter(n => n.message?.content?.content_type === 'text' && n.message?.author)
         .map(n => ({
           role: n.message.author.role,
-          content: (n.message.content.parts ?? []).filter(p => typeof p === 'string').join(''),
+          text: (n.message.content.parts ?? []).filter(p => typeof p === 'string').join(''),
           time: n.message.create_time ?? 0,
         }))
-        .filter(m => m.content.trim() && m.role !== 'system')
+        .filter(m => m.text.trim() && m.role !== 'system')
         .sort((a, b) => a.time - b.time);
 
-      if (!isWorthImporting(messages)) { skipped++; continue; }
+      const result = await importConversation({
+        id: convo.id,
+        title: convo.title ?? detail.title,
+        create_time: convo.create_time ?? detail.create_time,
+        messages,
+      }, { minWords: 80, dryRun: DRY_RUN });
 
-      const title = convo.title ?? 'Untitled';
-      const date = convo.create_time ? new Date(convo.create_time * 1000).toISOString().slice(0, 10) : 'unknown';
-      const firstUser = messages.find(m => m.role === 'user')?.content ?? '';
-
-      const session = {
-        project: titleToProject(title),
-        summary: `[ChatGPT Import] "${title}". ${firstUser.slice(0, 250).replace(/\n+/g, ' ').trim()}`,
-        stack: detectStack(messages.map(m => m.content).join(' ')),
-        tags: `chatgpt-import,${date.slice(0, 7)}`,
-      };
-
-      if (!DRY_RUN) {
-        const resp = await fetch(`${WHATNEXT_API}/session`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(session),
-        });
-        if (!resp.ok) { errors++; continue; }
-      }
-
+      if (result === 'trivial') { skipped++; continue; }
+      if (result === 'duplicate') { duplicates++; continue; }
       imported++;
       await page.waitForTimeout(80);
     } catch {
@@ -173,12 +150,13 @@ async function run() {
 
   console.log('\n');
   console.log('  ─────────────────────────────────');
-  console.log(`  Total:    ${allConversations.length}`);
-  console.log(`  Imported: ${imported}`);
-  console.log(`  Skipped:  ${skipped} (too short)`);
-  console.log(`  Errors:   ${errors}`);
+  console.log(`  Total:           ${allConversations.length}`);
+  console.log(`  ${DRY_RUN ? 'Would import' : 'Imported'}:    ${imported}`);
+  console.log(`  Already there:   ${duplicates}`);
+  console.log(`  Skipped:         ${skipped} (too short)`);
+  console.log(`  Errors:          ${errors}`);
   console.log('  ─────────────────────────────────');
-  if (!DRY_RUN) console.log(`\n  ✅ Done. Open http://localhost:3747 to browse your memories.\n`);
+  if (!DRY_RUN) console.log(`\n  Done. Open http://localhost:3747 to browse your memories.\n`);
 
   await browser.close();
 }

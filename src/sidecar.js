@@ -1,13 +1,15 @@
 /**
- * What Next — Smart Context Card writer
+ * What Next - Smart Context Card writer
  *
  * Writes per-project and global context files to ~/.whatnext/agents/ so any
  * AI tool (with or without MCP) can read them at session start.
  *
  * Files written:
- *   ~/.whatnext/agents/{project}.md  — per-project orientation card
- *   ~/.whatnext/context.md           — global pointer + cross-project brief
- *   ~/.copilot/copilot-instructions.md — Copilot session-start instructions
+ *   ~/.whatnext/agents/{project}.md  - per-project orientation card
+ *   ~/.whatnext/context.md           - global pointer + cross-project brief
+ *   ~/.copilot/copilot-instructions.md - a generic managed block pointing Copilot
+ *                                        CLI at the cards (only when ~/.copilot exists;
+ *                                        text outside the block is kept)
  *   ~/.whatnext/brief.md             - six-line session brief: global lessons + where the rest lives.
  *                                        Inject this plus the project card at session start and pull
  *                                        the full brief on demand.
@@ -18,7 +20,7 @@
  * footer) so a hook that injects it does not break prompt caching every day.
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { getProjectIntelligence, getRecentSessions, getRecentSessionsForProject, getWhatsNext, getAllFacts, listProjects, getRecentCommits, getHotFiles } from './db.js';
@@ -34,7 +36,16 @@ const CARD_WARN_CHARS = 12_000; // ~3k tokens - beyond this the card stops being
 
 function ensureDirs() {
   mkdirSync(AGENTS_DIR, { recursive: true });
-  mkdirSync(COPILOT_DIR, { recursive: true });
+}
+
+// Write only when the bytes differ, so editors and file watchers do not see a
+// change on every commit.
+function writeIfChanged(path, content) {
+  try {
+    if (readFileSync(path, 'utf8') === content) return false;
+  } catch {}
+  writeFileSync(path, content, 'utf8');
+  return true;
 }
 
 function safe(v) {
@@ -52,10 +63,41 @@ function clean(v) {
   return v == null ? '' : neutralize(String(v)).text;
 }
 
+// Single-line slots (bullets, commit subjects, summaries): stored newlines are
+// flattened so a memory cannot open its own "## " section on the card.
+function oneLine(v) {
+  return clean(v).replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ').trim();
+}
+
 function truncate(str, n) {
   if (!str) return '';
-  const s = clean(str);
+  const s = oneLine(str);
   return s.length > n ? s.slice(0, n - 3) + '...' : s;
+}
+
+// Multi-line slots keep their lines, but a line that would read as a heading
+// or a section rule is escaped so it renders as text inside its section.
+function block(v) {
+  return clean(v)
+    .split(/\r?\n|\r|\u2028|\u2029/)
+    .map(l => (/^\s{0,3}(?:#{1,6}(?:\s|$)|-{3,}\s*$|={3,}\s*$|\*{3,}\s*$|_{3,}\s*$)/.test(l) ? `\\${l.trimStart()}` : l))
+    .join('\n');
+}
+
+// A project name interpolated into a heading, a pointer line or YAML
+// frontmatter: one line, no leading heading/quote markers, no "---".
+function inlineName(projectName) {
+  return oneLine(projectName)
+    .replace(/-{3,}/g, '-')
+    .replace(/[`]/g, "'")
+    .replace(/^[#>\s-]+/, '')
+    .slice(0, 100) || 'project';
+}
+
+// Repo files and Copilot instructions point at the card by a home-relative
+// path, so no absolute home directory lands in a committed file.
+function cardRef(projectName) {
+  return `~/.whatnext/agents/${cardFileName(projectName)}`;
 }
 
 // Card filename for a project. Ordinary names ("what-next", "gooner-news")
@@ -117,7 +159,7 @@ export function writeSidecarForProject(projectName) {
     const hotFiles = getHotFiles(projectName);
 
     const lines = [];
-    lines.push(`# ${clean(projectName)} | What Next Context`);
+    lines.push(`# ${oneLine(projectName)} | What Next Context`);
     lines.push('');
     lines.push(DATA_NOTICE);
     lines.push('');
@@ -130,27 +172,27 @@ export function writeSidecarForProject(projectName) {
 
     if (intel) {
       lines.push('## Project Map');
-      if (safe(intel.repo_path)) lines.push(`**Repo:** ${clean(intel.repo_path)}`);
-      if (safe(intel.stack)) lines.push(`**Stack:** ${clean(intel.stack)}`);
-      if (safe(intel.deployment)) lines.push(`**Deployment:** ${clean(intel.deployment)}`);
-      if (safe(intel.env_vars)) lines.push(`**Env vars (keys only):** ${clean(intel.env_vars)}`);
+      if (safe(intel.repo_path)) lines.push(`**Repo:** ${oneLine(intel.repo_path)}`);
+      if (safe(intel.stack)) lines.push(`**Stack:** ${oneLine(intel.stack)}`);
+      if (safe(intel.deployment)) lines.push(`**Deployment:** ${oneLine(intel.deployment)}`);
+      if (safe(intel.env_vars)) lines.push(`**Env vars (keys only):** ${oneLine(intel.env_vars)}`);
       lines.push('');
 
       if (safe(intel.key_dirs)) {
         lines.push('## Where Things Live');
-        lines.push(clean(intel.key_dirs));
+        lines.push(block(intel.key_dirs));
         lines.push('');
       }
 
       if (safe(intel.conventions)) {
         lines.push('## Conventions & Patterns');
-        lines.push(clean(intel.conventions));
+        lines.push(block(intel.conventions));
         lines.push('');
       }
 
       if (safe(intel.extra)) {
         lines.push('## Key Decisions');
-        lines.push(clean(intel.extra));
+        lines.push(block(intel.extra));
         lines.push('');
       }
     }
@@ -166,7 +208,7 @@ export function writeSidecarForProject(projectName) {
     // Hot files: derived from commit history, no one has to write it.
     if (hotFiles.length > 0) {
       lines.push('## Hot Files (last 30 days)');
-      for (const h of hotFiles) lines.push(`- ${clean(h.file)} (${h.commits} commit${h.commits === 1 ? '' : 's'})`);
+      for (const h of hotFiles) lines.push(`- ${oneLine(h.file)} (${h.commits} commit${h.commits === 1 ? '' : 's'})`);
       lines.push('');
     }
 
@@ -186,14 +228,14 @@ export function writeSidecarForProject(projectName) {
 
     if (whatsNext?.next_steps) {
       lines.push('## Open Tasks');
-      lines.push(clean(whatsNext.next_steps));
+      lines.push(block(whatsNext.next_steps));
       lines.push('');
     }
 
     if (commits.length > 0) {
       lines.push('## Recent Commits');
       for (const c of commits) {
-        const hash = clean(c.commit_hash).slice(0, 7);
+        const hash = oneLine(c.commit_hash).replace(/`/g, '').slice(0, 7);
         lines.push(`- \`${hash}\` ${truncate(c.message, 80)}`);
       }
       lines.push('');
@@ -214,8 +256,8 @@ export function writeSidecarForProject(projectName) {
     if (intel?.repo_path) {
       const { path: repoPath, reason } = allowedRepoPath(intel.repo_path);
       if (repoPath) {
-        writeCursorRules(projectName, repoPath, filePath);
-        writeAgentsMd(projectName, repoPath, filePath);
+        writeCursorRules(projectName, repoPath);
+        writeAgentsMd(projectName, repoPath);
         repo = `pointer checked in ${repoPath}`;
       } else {
         repo = `repo pointer skipped (${reason})`;
@@ -228,23 +270,26 @@ export function writeSidecarForProject(projectName) {
   }
 }
 
-function writeCursorRules(projectName, repoPath, cardPath) {
+// Pointer only: the card itself (commit hashes, paths, env var names) never
+// lands in a repo file, and the block only changes when the project does.
+function writeCursorRules(projectName, repoPath) {
   try {
     const cursorDir = join(repoPath, '.cursor');
     const cursorRulesPath = join(repoPath, '.cursorrules');
-    const hasCursorDir = existsSync(cursorDir);
+    const rulesPath = join(cursorDir, 'rules');
     const hasCursorRules = existsSync(cursorRulesPath);
+    const hasRules = existsSync(rulesPath);
 
-    if (!hasCursorDir && !hasCursorRules) return;
+    // Only repos already set up for Cursor rules; never create .cursor/rules.
+    if (!hasCursorRules && !hasRules) return;
 
     const marker = '# [What Next] Auto-managed block - do not edit below this line';
     const block = [
       marker,
-      `# Context card for ${projectName} is at: ${cardPath}`,
-      `# It is updated automatically on every session dump and git commit.`,
-      `# Read it at the start of every session for instant orientation.`,
+      `# Context card for ${inlineName(projectName)}: ${cardRef(projectName)}`,
+      '# Read it at the start of every session. It holds the stack, key dirs, conventions,',
+      '# recent work and open tasks, updated automatically on every session dump and git commit.',
       '',
-      readFileSync(cardPath, 'utf8').slice(0, 2000),
     ].join('\n');
 
     // Append (or replace) the managed block in a rules file, keeping whatever
@@ -253,7 +298,7 @@ function writeCursorRules(projectName, repoPath, cardPath) {
       const existing = readFileSync(path, 'utf8');
       const markerIdx = existing.indexOf(marker);
       const base = markerIdx >= 0 ? existing.slice(0, markerIdx).trimEnd() : existing.trimEnd();
-      writeFileSync(path, base ? `${base}\n\n${block}` : block, 'utf8');
+      writeIfChanged(path, base ? `${base}\n\n${block}` : block);
     };
 
     if (hasCursorRules) {
@@ -262,16 +307,15 @@ function writeCursorRules(projectName, repoPath, cardPath) {
     }
     // Current Cursor reads .cursor/rules/*.mdc; older builds read a single
     // .cursor/rules file. Only ever write our own managed file in the dir.
-    const rulesPath = join(cursorDir, 'rules');
-    if (existsSync(rulesPath) && !statSync(rulesPath).isDirectory()) {
+    if (!statSync(rulesPath).isDirectory()) {
       mergeInto(rulesPath);
       return;
     }
-    mkdirSync(rulesPath, { recursive: true });
     const mdcPath = join(rulesPath, 'what-next.mdc');
     if (existsSync(mdcPath) && !readFileSync(mdcPath, 'utf8').includes(marker)) return; // user file, leave it
-    const frontmatter = ['---', `description: What Next context card for ${projectName}`, 'alwaysApply: true', '---', ''].join('\n');
-    writeFileSync(mdcPath, frontmatter + block, 'utf8');
+    const description = inlineName(projectName).replace(/[:#'"]/g, ' ').replace(/\s+/g, ' ').trim() || 'project';
+    const frontmatter = ['---', `description: What Next context card for ${description}`, 'alwaysApply: true', '---', ''].join('\n');
+    writeIfChanged(mdcPath, frontmatter + block);
   } catch {
     // cursor rules write is best-effort, never throw
   }
@@ -279,7 +323,7 @@ function writeCursorRules(projectName, repoPath, cardPath) {
 
 // Claude Code reads AGENTS.md when there is no CLAUDE.md; Codex and Copilot read
 // it always. One managed block points all of them at the card.
-function writeAgentsMd(projectName, repoPath, cardPath) {
+function writeAgentsMd(projectName, repoPath) {
   try {
     const agentsPath = join(repoPath, 'AGENTS.md');
     const hasAgents = existsSync(agentsPath);
@@ -290,8 +334,8 @@ function writeAgentsMd(projectName, repoPath, cardPath) {
     const block = [
       marker,
       '## Orientation (What Next)',
-      `Read \`${cardPath}\` at the start of every session. It holds the stack, key dirs,`,
-      `conventions, recent work and open tasks for ${projectName}, updated on every session dump and commit.`,
+      `Read \`${cardRef(projectName)}\` at the start of every session. It holds the stack, key dirs,`,
+      `conventions, recent work and open tasks for ${inlineName(projectName)}, updated on every session dump and commit.`,
       '',
     ].join('\n');
 
@@ -302,7 +346,7 @@ function writeAgentsMd(projectName, repoPath, cardPath) {
       const next = base ? `${base}\n\n${block}` : block;
       if (next !== existing) writeFileSync(agentsPath, next, 'utf8');
     } else {
-      writeFileSync(agentsPath, `# ${projectName}\n\n${block}`, 'utf8');
+      writeFileSync(agentsPath, `# ${inlineName(projectName)}\n\n${block}`, 'utf8');
     }
   } catch {
     // best-effort, never throw
@@ -331,7 +375,7 @@ export function writeGlobalContext() {
       lines.push('|---------|-------------|');
       for (const p of projects) {
         const last = formatDate(p.last_session);
-        lines.push(`| ${clean(p.name)} | ${last} |`);
+        lines.push(`| ${oneLine(p.name)} | ${last} |`);
       }
       lines.push('');
     }
@@ -339,7 +383,7 @@ export function writeGlobalContext() {
     if (recentSessions.length > 0) {
       lines.push('## Recent Work');
       for (const s of recentSessions) {
-        lines.push(`**[${clean(s.project_name)}]** ${formatDate(s.session_date)}: ${truncate(s.summary, 200)}`);
+        lines.push(`**[${oneLine(s.project_name)}]** ${formatDate(s.session_date)}: ${truncate(s.summary, 200)}`);
         if (s.next_steps) lines.push(`- Open: ${truncate(s.next_steps, 150)}`);
       }
       lines.push('');
@@ -355,7 +399,7 @@ export function writeGlobalContext() {
     if (globalFacts.length > 0) {
       lines.push('## Global Facts & Preferences');
       for (const f of globalFacts.filter(f => f.category !== 'lesson')) {
-        lines.push(`- **${clean(f.category)}:** ${truncate(f.content, 200)}`);
+        lines.push(`- **${oneLine(f.category)}:** ${truncate(f.content, 200)}`);
       }
       lines.push('');
     }
@@ -392,35 +436,68 @@ function writeSessionBrief(lessons) {
   }
 }
 
-function writeCopilotInstructions() {
+const COPILOT_START = '<!-- What Next: managed block start - edits inside this block are overwritten -->';
+const COPILOT_END = '<!-- What Next: managed block end -->';
+const COPILOT_BLOCK = [
+  COPILOT_START,
+  '## What Next memory',
+  'At the start of a session:',
+  '1. Identify the project from the workspace folder name.',
+  '2. Read `~/.whatnext/agents/{project-name}.md` if it exists: stack, key dirs, conventions, recent work and open tasks.',
+  '   It is generated automatically, so read it but do not edit it.',
+  '3. If there is no project card, read `~/.whatnext/context.md` for the cross-project overview.',
+  '',
+  'What Next MCP tools (if available): Each tool describes itself. Start with `get_orientation`, and save',
+  'progress with `dump_session` at milestones and at the end of a session.',
+  COPILOT_END,
+].join('\n');
+
+// Earlier releases replaced the whole file with one person's instructions.
+// Recognised only by that generated text, so a file the user wrote is never
+// treated as legacy.
+function isLegacyCopilotFile(text) {
+  return text.startsWith("# Danny's Copilot Instructions")
+    && text.includes('~/.whatnext/agents/{project-name}.md')
+    && text.includes('## What Next MCP tools');
+}
+
+// Keeps a managed block in ~/.copilot/copilot-instructions.md; text outside
+// the markers is the user's. Exported for tests.
+// Returns 'skipped' | 'unchanged' | 'written' | 'migrated'.
+export function writeCopilotInstructions() {
   try {
-    const content = `# Danny's Copilot Instructions
+    // Only for people who use Copilot CLI; never create ~/.copilot.
+    if (!existsSync(COPILOT_DIR) || !statSync(COPILOT_DIR).isDirectory()) return 'skipped';
 
-You are working with Danny Mchunu (Greenberries studio, Durban).
+    let existing = null;
+    try { existing = readFileSync(COPILOT_INSTRUCTIONS, 'utf8'); } catch {}
 
-## Session start — mandatory
-1. Identify the project from the workspace folder name
-2. Read \`~/.whatnext/agents/{project-name}.md\` — full context: stack, structure, conventions, recent work, open tasks
-3. If no project file exists: read \`~/.whatnext/context.md\` for global context
-4. Start oriented. No codebase exploration, no clarifying questions.
+    if (existing != null && isLegacyCopilotFile(existing)) {
+      const backup = `${COPILOT_INSTRUCTIONS}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      copyFileSync(COPILOT_INSTRUCTIONS, backup);
+      writeFileSync(COPILOT_INSTRUCTIONS, COPILOT_BLOCK + '\n', 'utf8');
+      process.stderr.write(`[sidecar] Replaced the old generated Copilot instructions; previous file kept at ${backup}\n`);
+      return 'migrated';
+    }
 
-## Session end — mandatory
-Update \`~/.whatnext/agents/{project-name}.md\` with anything new discovered this session.
-Also call \`dump_session\` via What Next MCP if available.
-
-## Danny's defaults
-- Stack: React + Vite + TypeScript + Tailwind + Supabase + Netlify (frontend) + Railway (backend)
-- All repos private. Never create a public repo without explicit confirmation.
-- Concise and direct. Lead with the answer. No long explanations unless asked.
-- No emojis. No long dashes — use hyphens.
-- Security: anon key frontend only, service role key backend only, RLS on every Supabase table.
-- Footer on every site: Terms & Conditions link + "Built by Greenberries" linking to greenberries.co.za
-
-## What Next MCP tools (if available)
-Each tool describes itself. Start with \`get_orientation\`, end with \`dump_session\`.
-`;
-    writeFileSync(COPILOT_INSTRUCTIONS, content, 'utf8');
+    let next;
+    if (existing == null || existing.trim() === '') {
+      next = COPILOT_BLOCK + '\n';
+    } else {
+      const startIdx = existing.indexOf(COPILOT_START);
+      if (startIdx < 0) {
+        next = `${existing.trimEnd()}\n\n${COPILOT_BLOCK}\n`;
+      } else {
+        const endIdx = existing.indexOf(COPILOT_END, startIdx);
+        const after = endIdx >= 0 ? existing.slice(endIdx + COPILOT_END.length) : '\n';
+        next = existing.slice(0, startIdx) + COPILOT_BLOCK + after;
+      }
+    }
+    if (next === existing) return 'unchanged';
+    writeFileSync(COPILOT_INSTRUCTIONS, next, 'utf8');
+    return 'written';
   } catch (err) {
     process.stderr.write(`[sidecar] Failed to write Copilot instructions: ${err.message}\n`);
+    return 'skipped';
   }
 }
