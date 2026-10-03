@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security (cloud)
+- **API keys are no longer stored in plaintext.** Only a sha256 hash is kept; a key is shown once, in
+  the welcome email (or the admin create response). On boot the cloud clears existing plaintext keys
+  wherever the stored hash matches, so every existing key keeps working. Re-sending a welcome email
+  that never arrived now issues a fresh key, and is refused for an account whose key is already in use.
+
 ## [2.4.0] - 2026-10-03
 
 Fixes from a full QA sweep of every surface: npm package, local API, MCP server, cloud, sync,

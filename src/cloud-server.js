@@ -21,7 +21,7 @@
  *
  * Admin endpoints (X-Admin-Key required):
  *   POST /admin/users                   — create user + issue API key
- *   POST /admin/users/resend-welcome    - re-send an unsent welcome email to the stored address
+ *   POST /admin/users/resend-welcome    - re-send an unsent welcome email (with a new key) to the stored address
  *
  * Authenticated endpoints (X-API-Key required):
  *   GET  /user                          — current user profile + stats
@@ -179,7 +179,7 @@ async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id         SERIAL PRIMARY KEY,
-      api_key    TEXT NOT NULL UNIQUE,
+      api_key    TEXT UNIQUE,
       email      TEXT NOT NULL UNIQUE,
       name       TEXT,
       plan       TEXT NOT NULL DEFAULT 'beta',
@@ -280,11 +280,19 @@ async function initSchema() {
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_intel_user ON project_intelligence(user_id)');
 
-  // API keys are looked up by sha256 hash. The plaintext column stays populated
-  // until a separate, approved step drops it.
+  // API keys are looked up by sha256 hash and never stored in plaintext: a key
+  // is shown once, in the welcome email. Rows from before this keep working
+  // through their hash; the plaintext is cleared only where the hash matches it.
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_hash TEXT');
-  await pool.query(`UPDATE users SET api_key_hash = encode(sha256(convert_to(api_key, 'UTF8')), 'hex') WHERE api_key_hash IS NULL`);
+  await pool.query(`UPDATE users SET api_key_hash = encode(sha256(convert_to(api_key, 'UTF8')), 'hex') WHERE api_key_hash IS NULL AND api_key IS NOT NULL`);
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash)');
+  await pool.query('ALTER TABLE users ALTER COLUMN api_key DROP NOT NULL');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS first_used_at TIMESTAMPTZ');
+  const cleared = await pool.query(`
+    UPDATE users SET api_key = NULL
+    WHERE api_key IS NOT NULL AND api_key_hash = encode(sha256(convert_to(api_key, 'UTF8')), 'hex')
+  `);
+  if (cleared.rowCount) log('info', 'Cleared plaintext API keys (hash kept)', { users: cleared.rowCount });
 
   // Edits and deletes reach other machines through /export. Existing rows keep
   // updated_at NULL (never edited), so the upgrade does not re-export them all.
@@ -362,7 +370,12 @@ function hashApiKey(apiKey) {
 async function resolveUser(apiKey) {
   if (!apiKey || typeof apiKey !== 'string') return null;
   const { rows } = await pool.query('SELECT * FROM users WHERE api_key_hash = $1', [hashApiKey(apiKey)]);
-  return rows[0] ?? null;
+  const user = rows[0] ?? null;
+  // Remember that this key has been used, so a welcome re-send never replaces it
+  if (user && !user.first_used_at) {
+    pool.query('UPDATE users SET first_used_at = NOW() WHERE id = $1 AND first_used_at IS NULL', [user.id]).catch(() => {});
+  }
+  return user;
 }
 
 // Input validation
@@ -531,14 +544,38 @@ async function getProject(userId, name) {
 
 // ─── User management ──────────────────────────────────────────────────────────
 
+// The plaintext key is returned to the caller once (for the welcome email or the
+// admin response) and only its hash is stored.
 async function createUser({ email, name, plan = 'beta' }) {
   const apiKey = makeApiKey();
   const { rows } = await pool.query(`
-    INSERT INTO users (api_key, api_key_hash, email, name, plan)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, api_key, email, name, plan, created_at
-  `, [apiKey, hashApiKey(apiKey), email.toLowerCase().trim(), name ?? null, plan]);
-  return rows[0];
+    INSERT INTO users (api_key_hash, email, name, plan)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id, email, name, plan, created_at
+  `, [hashApiKey(apiKey), email.toLowerCase().trim(), name ?? null, plan]);
+  return { ...rows[0], api_key: apiKey };
+}
+
+// True once a user's key has been used: first_used_at is set by resolveUser, and
+// accounts from before that column existed count as used if they hold any data.
+async function keyInUse(userId) {
+  const { rows: [r] } = await pool.query(`
+    SELECT (first_used_at IS NOT NULL)
+        OR EXISTS (SELECT 1 FROM sessions WHERE user_id = $1)
+        OR EXISTS (SELECT 1 FROM facts WHERE user_id = $1)
+        OR EXISTS (SELECT 1 FROM projects WHERE user_id = $1) AS used
+    FROM users WHERE id = $1
+  `, [userId]);
+  return !!r?.used;
+}
+
+// A welcome that never arrived means the user never had their key, so a re-send
+// issues a fresh one. Refuses (null) when the current key is already in use.
+async function reissueKeyForWelcome(user) {
+  if (await keyInUse(user.id)) return null;
+  const apiKey = makeApiKey();
+  await pool.query('UPDATE users SET api_key_hash = $1, api_key = NULL WHERE id = $2', [hashApiKey(apiKey), user.id]);
+  return { ...user, api_key: apiKey };
 }
 
 // ─── Email ────────────────────────────────────────────────────────────────────
@@ -751,7 +788,7 @@ async function start() {
         // Already exists: idempotent, but finish an earlier failed welcome email.
         // Always sent to the stored address, never to anything in this payload.
         const existing = await pool.query(
-          'SELECT id, api_key, email, name, welcome_sent_at FROM users WHERE email = $1', [email]
+          'SELECT id, email, name, welcome_sent_at FROM users WHERE email = $1', [email]
         );
         if (existing.rows.length) {
           const u = existing.rows[0];
@@ -759,8 +796,13 @@ async function start() {
             log('info', 'Webhook: user already exists', { email });
             return send(res, 200, { ok: true, note: 'already exists' });
           }
-          log('info', 'Webhook: user exists without welcome email, re-sending', { email });
-          if (!(await deliverWelcome(u))) return send(res, 502, { error: 'welcome email failed' });
+          const fresh = await reissueKeyForWelcome(u);
+          if (!fresh) {
+            log('info', 'Webhook: user exists and their key is in use, not re-sending', { email });
+            return send(res, 200, { ok: true, note: 'already exists' });
+          }
+          log('info', 'Webhook: user exists without welcome email, re-sending with a new key', { email });
+          if (!(await deliverWelcome(fresh))) return send(res, 502, { error: 'welcome email failed' });
           return send(res, 200, { ok: true, note: 'already exists, welcome email re-sent' });
         }
 
@@ -821,11 +863,13 @@ async function start() {
         const email = normalizeEmail(body.email);
         if (!email) return send(res, 400, { error: 'valid email required' });
         const { rows: [u] } = await pool.query(
-          'SELECT id, api_key, email, name, welcome_sent_at FROM users WHERE email = $1', [email]
+          'SELECT id, email, name, welcome_sent_at FROM users WHERE email = $1', [email]
         );
         if (!u) return send(res, 404, { error: 'User not found' });
         if (u.welcome_sent_at) return send(res, 409, { error: 'Welcome email already sent' });
-        if (!(await deliverWelcome(u))) return send(res, 502, { error: 'welcome email failed' });
+        const fresh = await reissueKeyForWelcome(u);
+        if (!fresh) return send(res, 409, { error: "This user's API key is already in use, so it was not replaced" });
+        if (!(await deliverWelcome(fresh))) return send(res, 502, { error: 'welcome email failed' });
         return send(res, 200, { ok: true });
       } catch (err) {
         if (err.statusCode) return send(res, err.statusCode, { error: err.message });
