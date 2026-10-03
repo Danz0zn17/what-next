@@ -1,12 +1,10 @@
 import Database from 'better-sqlite3';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { sanitizeFields, flagsToColumn, detectFlags, neutralize, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, INTEL_TEXT_FIELDS } from './sanitize.js';
 import { sqlDate } from './timeparse.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WHATNEXT_DATA_DIR || join(homedir(), '.whatnext', 'data');
 const DB_PATH = join(DATA_DIR, 'what-next.db');
 
@@ -128,6 +126,17 @@ try { db.exec('ALTER TABLE sessions             ADD COLUMN injection_flags TEXT'
 try { db.exec('ALTER TABLE facts                ADD COLUMN injection_flags TEXT'); } catch {}
 try { db.exec('ALTER TABLE project_intelligence ADD COLUMN injection_flags TEXT'); } catch {}
 
+// Migration (v2.4.0): sync state per row.
+//   sessions.dirty / updated_at - a local edit not yet sent to the cloud, and
+//     when the row content last changed (local edit or newer cloud copy).
+//   sync_error - the cloud rejected this row with a 4xx; it is not pushed again
+//     until it is edited, so one bad row cannot block every later push.
+try { db.exec('ALTER TABLE sessions      ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE sessions      ADD COLUMN updated_at TEXT'); } catch {}
+try { db.exec('ALTER TABLE sessions      ADD COLUMN sync_error TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts         ADD COLUMN sync_error TEXT'); } catch {}
+try { db.exec('ALTER TABLE pending_gists ADD COLUMN sync_error TEXT'); } catch {}
+
 // One-off cleanup (v2.2.0): remove sessions/facts that are exact echoes of a
 // row already present (same project + text), keeping the oldest row and its
 // cloud id. FTS rows and embeddings of removed rows are dropped too. A session
@@ -216,11 +225,18 @@ export function upsertProject(name, description = null) {
   return result.lastInsertRowid;
 }
 
+// session_date is stored as "2026-09-21 13:41:56" (SQLite) and, on rows pulled
+// from the cloud before v2.4.0, "2026-09-21T13:41:56.000Z". Plain text order
+// puts every 'T' row after every ' ' row on the same day, so order on the
+// normalised form.
+const SESSION_DATE_ORDER = "replace(session_date, 'T', ' ')";
+const sessionDateOrder = (alias) => `replace(${alias}.session_date, 'T', ' ')`;
+
 export function getProject(name) {
   const project = db.prepare('SELECT * FROM projects WHERE name = ?').get(name);
   if (!project) return null;
   const sessions = db.prepare(
-    'SELECT * FROM sessions WHERE project_id = ? ORDER BY session_date DESC'
+    `SELECT * FROM sessions WHERE project_id = ? ORDER BY ${SESSION_DATE_ORDER} DESC`
   ).all(project.id);
   return { ...project, sessions };
 }
@@ -231,7 +247,7 @@ export function listProjects() {
     FROM projects p
     LEFT JOIN sessions s ON s.project_id = p.id
     GROUP BY p.id
-    ORDER BY last_session DESC NULLS LAST
+    ORDER BY MAX(${sessionDateOrder('s')}) DESC NULLS LAST
   `).all();
 }
 
@@ -279,6 +295,11 @@ export function editSession(id, updates) {
   const merged = { ...current, ...clean };
   fields.push('injection_flags = ?');
   params.push(flagsToColumn(sanitizeFields(merged, SESSION_TEXT_FIELDS).flags));
+  // Queue the edit for the cloud: sync PATCHes dirty rows that have a cloud id
+  // (rows without one are pushed whole). An edit also clears an earlier
+  // rejection, so a row the cloud refused gets another try once it is fixed.
+  fields.push('dirty = 1', 'updated_at = ?', 'sync_error = NULL');
+  params.push(new Date().toISOString());
   params.push(id);
 
   const result = db.prepare(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`).run(...params);
@@ -301,7 +322,7 @@ export function getRecentSessions(limit = 5) {
     SELECT s.*, p.name as project_name
     FROM sessions s
     JOIN projects p ON p.id = s.project_id
-    ORDER BY s.session_date DESC
+    ORDER BY ${sessionDateOrder('s')} DESC
     LIMIT ?
   `).all(limit);
 }
@@ -312,7 +333,7 @@ export function getRecentSessionsForProject(projectName, limit = 3) {
     FROM sessions s
     JOIN projects p ON p.id = s.project_id
     WHERE p.name = ?
-    ORDER BY s.session_date DESC
+    ORDER BY ${sessionDateOrder('s')} DESC
     LIMIT ?
   `).all(projectName, limit);
 }
@@ -328,9 +349,9 @@ export function getWhatsNext(limit = 8) {
         SELECT s2.id FROM sessions s2
         WHERE s2.project_id = s.project_id
           AND s2.next_steps IS NOT NULL AND trim(s2.next_steps) != ''
-        ORDER BY s2.session_date DESC LIMIT 1
+        ORDER BY ${sessionDateOrder('s2')} DESC LIMIT 1
       )
-    ORDER BY s.session_date DESC
+    ORDER BY ${sessionDateOrder('s')} DESC
     LIMIT ?
   `).all(limit);
 }
@@ -338,7 +359,7 @@ export function getWhatsNext(limit = 8) {
 // --- Sync status ---
 export function getSyncStatus() {
   const last = db.prepare("SELECT value FROM sync_state WHERE key = 'last_cloud_sync'").get();
-  const pending = db.prepare('SELECT COUNT(*) as count FROM pending_gists').get();
+  const pending = db.prepare('SELECT COUNT(*) as count FROM pending_gists WHERE sync_error IS NULL').get();
   return {
     last_cloud_sync: last?.value ?? null,
     pending_gists: pending?.count ?? 0,
@@ -360,16 +381,19 @@ export function getAllFacts() {
 // window chronologically instead of matching text.
 // FTS5 treats "-", ":" and similar as operators, so "surf-rides" errors with
 // "no such column". Quote every term; terms are ANDed as before.
+// Control characters (including NUL) are dropped first: FTS5 rejects them.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
 function ftsQuery(query) {
-  return query.trim().split(/\s+/).map(t => '"' + t.replace(/"/g, '""') + '"').join(' ');
+  return String(query).replace(CONTROL_CHARS, ' ').trim().split(/\s+/).filter(Boolean)
+    .map(t => '"' + t.replace(/"/g, '""') + '"').join(' ');
 }
 
 // Dates are stored both as "2026-09-21 13:41:56" (SQLite) and
 // "2026-09-21T13:41:56.000Z" (cloud sync); sqlDate (timeparse.js) normalises
 // both sides to the first form before comparing.
 export function searchMemories(query, limit = 10, { since, until } = {}) {
-  const empty = !query.trim();
-  query = ftsQuery(query);
+  query = ftsQuery(query ?? '');
+  const empty = !query;
   const ranged = since || until;
   const range = (col) => ranged ? ` AND replace(substr(${col}, 1, 19), 'T', ' ') >= ? AND replace(substr(${col}, 1, 19), 'T', ' ') < ?` : '';
   const rangeArgs = ranged ? [since ? sqlDate(since) : '0000', until ? sqlDate(until) : '9999'] : [];
@@ -381,7 +405,7 @@ export function searchMemories(query, limit = 10, { since, until } = {}) {
     const sessions = db.prepare(`
       SELECT s.*, p.name as project_name FROM sessions s
       JOIN projects p ON p.id = s.project_id
-      WHERE 1=1${range('s.session_date')} ORDER BY s.session_date DESC LIMIT ?
+      WHERE 1=1${range('s.session_date')} ORDER BY ${sessionDateOrder('s')} DESC LIMIT ?
     `).all(...rangeArgs, limit);
     const facts = db.prepare(`
       SELECT f.*, p.name as project_name FROM facts f
@@ -581,7 +605,7 @@ export function getLastSession(projectName) {
     FROM sessions s
     JOIN projects p ON p.id = s.project_id
     WHERE p.name = ?
-    ORDER BY s.session_date DESC
+    ORDER BY ${sessionDateOrder('s')} DESC
     LIMIT 1
   `).get(projectName);
 }
@@ -601,8 +625,14 @@ export function storePendingGist(gistId, payload) {
   db.prepare('INSERT INTO pending_gists (gist_id, payload) VALUES (?, ?)').run(gistId, payload);
 }
 
+// Gists the cloud rejected (4xx) stay in the table, and on GitHub, but are not
+// retried; the session they came from is pushed by the normal sync path.
 export function getPendingGists() {
-  return db.prepare('SELECT * FROM pending_gists ORDER BY created_at ASC').all();
+  return db.prepare('SELECT * FROM pending_gists WHERE sync_error IS NULL ORDER BY created_at ASC').all();
+}
+
+export function markPendingGistRejected(id, reason) {
+  db.prepare('UPDATE pending_gists SET sync_error = ? WHERE id = ?').run(String(reason ?? 'rejected').slice(0, 500), id);
 }
 
 export function deletePendingGist(id) {
@@ -632,11 +662,111 @@ export function setFactCloudId(localId, cloudId) {
   db.prepare('UPDATE facts SET cloud_id = ? WHERE id = ? AND cloud_id IS NULL').run(String(cloudId), localId);
 }
 
-export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_was_built, decisions, stack, next_steps, tags, session_date }) {
+// The cloud's rejection of a local row (4xx). Persisted so it survives a
+// restart; editSession clears it.
+export function markSyncError(table, id, reason) {
+  if (table !== 'sessions' && table !== 'facts') throw new Error(`markSyncError: bad table ${table}`);
+  db.prepare(`UPDATE ${table} SET sync_error = ? WHERE id = ?`).run(String(reason ?? 'rejected').slice(0, 500), id);
+}
+
+// Local edits waiting to be PATCHed to the cloud.
+export function getDirtySessions(limit = 25) {
+  return db.prepare(`
+    SELECT id, cloud_id, updated_at, summary, what_was_built, decisions, stack, next_steps, tags
+    FROM sessions WHERE dirty = 1 AND cloud_id IS NOT NULL AND sync_error IS NULL
+    ORDER BY id ASC LIMIT ?
+  `).all(limit);
+}
+
+// Clear the dirty flag after a successful PATCH, unless the row was edited
+// again while the request was in flight (updated_at moved on).
+export function markSessionSynced(id, seenUpdatedAt, cloudUpdatedAt = null) {
+  db.prepare(`
+    UPDATE sessions SET dirty = 0, updated_at = COALESCE(?, updated_at)
+    WHERE id = ? AND updated_at IS ?
+  `).run(cloudUpdatedAt ? isoFromCloud(cloudUpdatedAt) : null, id, seenUpdatedAt);
+}
+
+// Cloud timestamps arrive as Postgres text ("2026-09-27 10:00:00.123456+00"),
+// local ones as ISO or SQLite text with no zone (UTC). Returns ms or NaN.
+export function parseCloudTimestamp(value) {
+  if (!value || typeof value !== 'string') return NaN;
+  let v = value.trim().replace(' ', 'T');
+  v = v.replace(/(\.\d{3})\d+/, '$1');
+  v = v.replace(/([+-]\d{2})$/, '$1:00');
+  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(v)) v += 'Z';
+  return Date.parse(v);
+}
+
+function isoFromCloud(value) {
+  const t = parseCloudTimestamp(value);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+// Stored session_date shape: "YYYY-MM-DD HH:MM:SS" UTC, same as datetime('now').
+function sessionDateFromCloud(value) {
+  const t = parseCloudTimestamp(value);
+  return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 19).replace('T', ' ') : null;
+}
+
+function refreshSessionFts(id, before, after) {
+  db.prepare(`INSERT INTO sessions_fts(sessions_fts, rowid, summary, what_was_built, decisions, stack, next_steps, tags) VALUES('delete', ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, before.summary, before.what_was_built, before.decisions, before.stack, before.next_steps, before.tags);
+  db.prepare(`INSERT INTO sessions_fts(rowid, summary, what_was_built, decisions, stack, next_steps, tags) VALUES(?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, after.summary, after.what_was_built, after.decisions, after.stack, after.next_steps, after.tags);
+}
+
+// A cloud row this machine already holds. Applied only when the cloud copy was
+// edited (updated_at after created_at) more recently than the local row last
+// changed; a newer local edit wins and is pushed instead. Returns the local id
+// when the text changed, else null.
+function applyCloudEdit(local, { summary, what_was_built, decisions, stack, next_steps, tags, created_at, updated_at }) {
+  const cloudUpdated = parseCloudTimestamp(updated_at);
+  if (!Number.isFinite(cloudUpdated) || !(cloudUpdated > parseCloudTimestamp(created_at))) return null;
+  const localUpdated = parseCloudTimestamp(local.updated_at);
+  if (Number.isFinite(localUpdated) && cloudUpdated <= localUpdated) return null;
+  const { values: v, flags } = sanitizeFields(
+    { summary, what_was_built, decisions, stack, next_steps, tags }, SESSION_TEXT_FIELDS);
+  const next = { summary: v.summary, what_was_built: v.what_was_built ?? null, decisions: v.decisions ?? null,
+    stack: v.stack ?? null, next_steps: v.next_steps ?? null, tags: v.tags ?? null };
+  const changed = SESSION_TEXT_FIELDS.some(f => (local[f] ?? null) !== next[f]);
+  const stamp = new Date(cloudUpdated).toISOString();
+  if (!changed) {
+    db.prepare('UPDATE sessions SET updated_at = ?, dirty = 0 WHERE id = ?').run(stamp, local.id);
+    return null;
+  }
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE sessions SET summary = ?, what_was_built = ?, decisions = ?, stack = ?, next_steps = ?, tags = ?,
+        injection_flags = ?, updated_at = ?, dirty = 0, sync_error = NULL
+      WHERE id = ?
+    `).run(next.summary, next.what_was_built, next.decisions, next.stack, next.next_steps, next.tags, flagsToColumn(flags), stamp, local.id);
+    refreshSessionFts(local.id, local, next);
+    db.prepare("DELETE FROM embeddings WHERE rowtype = 'session' AND row_id = ?").run(local.id);
+  })();
+  return local.id;
+}
+
+// A session deleted in the cloud (tombstone from /export): remove the local
+// copy, its FTS row and its embedding. Returns true when a row was removed.
+export function deleteSessionByCloudId(cloudId) {
+  if (!cloudId) return false;
+  const row = db.prepare('SELECT * FROM sessions WHERE cloud_id = ?').get(String(cloudId));
+  if (!row) return false;
+  db.transaction(() => {
+    db.prepare(`INSERT INTO sessions_fts(sessions_fts, rowid, summary, what_was_built, decisions, stack, next_steps, tags) VALUES('delete', ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.summary, row.what_was_built, row.decisions, row.stack, row.next_steps, row.tags);
+    db.prepare("DELETE FROM embeddings WHERE rowtype = 'session' AND row_id = ?").run(row.id);
+    db.prepare('DELETE FROM sessions WHERE id = ?').run(row.id);
+  })();
+  return true;
+}
+
+export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_was_built, decisions, stack, next_steps, tags, session_date, created_at, updated_at }) {
   if (!project_name || !summary) return null;
   if (cloud_id) {
-    const exists = db.prepare('SELECT id FROM sessions WHERE cloud_id = ?').get(String(cloud_id));
-    if (exists) return null;
+    const exists = db.prepare('SELECT * FROM sessions WHERE cloud_id = ?').get(String(cloud_id));
+    if (exists) return applyCloudEdit(exists, { summary, what_was_built, decisions, stack, next_steps, tags, created_at, updated_at });
   }
   const projectId = upsertProject(project_name);
   // Sanitise before the twin lookup: a row written here was sanitised on the
@@ -666,7 +796,7 @@ export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_w
   const result = db.prepare(`
     INSERT INTO sessions (project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date, cloud_id, injection_flags)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, v.summary, v.what_was_built ?? null, v.decisions ?? null, v.stack ?? null, v.next_steps ?? null, v.tags ?? null, session_date ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null, flagsToColumn(flags));
+  `).run(projectId, v.summary, v.what_was_built ?? null, v.decisions ?? null, v.stack ?? null, v.next_steps ?? null, v.tags ?? null, sessionDateFromCloud(session_date) ?? session_date ?? sessionDateFromCloud(new Date().toISOString()), cloud_id ? String(cloud_id) : null, flagsToColumn(flags));
   return result.lastInsertRowid;
 }
 

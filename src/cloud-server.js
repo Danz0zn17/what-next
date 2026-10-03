@@ -97,12 +97,23 @@ function pruneRateLimit(now = Date.now()) {
 // Prune stale entries every 5 minutes
 setInterval(() => pruneRateLimit(), 5 * 60_000).unref();
 
-// Railway's proxy appends the real client address as the right-most
-// X-Forwarded-For entry; anything to its left is client supplied.
+// Client address for rate limiting. This trusts Railway's edge: it sets
+// X-Real-IP to the connecting client and puts that same address first in
+// X-Forwarded-For. The right-most X-Forwarded-For entry is one of several
+// internal proxy hops and rotates between requests, so it must not be used.
+// Only correct while the service sits behind Railway's edge.
+function normalizeIp(ip) {
+  const v = typeof ip === 'string' ? ip.trim() : '';
+  const mapped = v.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  return mapped ? mapped[1] : v;
+}
+
 function clientIp(req) {
+  const real = normalizeIp(req.headers['x-real-ip']);
+  if (real) return real;
   const xff = req.headers['x-forwarded-for'];
-  const last = typeof xff === 'string' ? xff.split(',').pop().trim() : '';
-  return last || req.socket?.remoteAddress || 'unknown';
+  const first = typeof xff === 'string' ? normalizeIp(xff.split(',')[0]) : '';
+  return first || normalizeIp(req.socket?.remoteAddress) || 'unknown';
 }
 
 // ─── Structured logging ───────────────────────────────────────────────────────
@@ -275,6 +286,20 @@ async function initSchema() {
   await pool.query(`UPDATE users SET api_key_hash = encode(sha256(convert_to(api_key, 'UTF8')), 'hex') WHERE api_key_hash IS NULL`);
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash)');
 
+  // Edits and deletes reach other machines through /export. Existing rows keep
+  // updated_at NULL (never edited), so the upgrade does not re-export them all.
+  await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE sessions ALTER COLUMN updated_at SET DEFAULT NOW()');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS session_tombstones (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      session_id INTEGER NOT NULL,
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_tombstones_user_deleted ON session_tombstones(user_id, deleted_at)');
+
   // welcome_sent_at: when the column is first added, mark every existing user as
   // already welcomed so nobody is mass emailed. Later NULLs mean a real send failure.
   const client = await pool.connect();
@@ -332,15 +357,12 @@ function hashApiKey(apiKey) {
   return createHash('sha256').update(String(apiKey), 'utf8').digest('hex');
 }
 
+// Every key has a hash: initSchema backfills api_key_hash before the server
+// listens and createUser always writes it, so there is no plaintext fallback.
 async function resolveUser(apiKey) {
   if (!apiKey || typeof apiKey !== 'string') return null;
   const { rows } = await pool.query('SELECT * FROM users WHERE api_key_hash = $1', [hashApiKey(apiKey)]);
-  if (rows[0]) return rows[0];
-  // Fallback for rows not yet hashed
-  const { rows: legacy } = await pool.query(
-    'SELECT * FROM users WHERE api_key_hash IS NULL AND api_key = $1', [apiKey]
-  );
-  return legacy[0] ?? null;
+  return rows[0] ?? null;
 }
 
 // Input validation
@@ -385,11 +407,22 @@ function parseSince(raw) {
   return raw;
 }
 
-// The webhook secret arrives in the X-Webhook-Secret header. The ?secret= query
-// param is still accepted because the Netlify function and this server deploy
-// separately; drop it once both sides send and read the header.
-function webhookSecretFrom(req, url) {
-  return req.headers['x-webhook-secret'] ?? url.searchParams.get('secret');
+// The webhook secret is only read from the X-Webhook-Secret header. A query
+// string secret ends up in proxy and access logs, so it is never accepted.
+function webhookSecretFrom(req) {
+  return req.headers['x-webhook-secret'] ?? null;
+}
+
+// Optional client session_date: kept when it is a real date between 2020 and
+// one day from now, otherwise the server stamps NOW(). A date with no zone is UTC.
+const MIN_SESSION_DATE = Date.parse('2020-01-01T00:00:00Z');
+function parseSessionDate(raw, now = Date.now()) {
+  if (typeof raw !== 'string' || !raw || raw.length > 64) return null;
+  let v = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) v = v.replace(' ', 'T') + 'Z';
+  const t = Date.parse(v);
+  if (!Number.isFinite(t) || t < MIN_SESSION_DATE || t > now + 86_400_000) return null;
+  return new Date(t).toISOString();
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -410,16 +443,17 @@ async function upsertProject(userId, name, description = null) {
 const cap = (s, n) => (s == null ? null : String(s).slice(0, n));
 
 const SESSION_CAPS = { summary: 4000, what_was_built: 8000, decisions: 4000, stack: 1000, next_steps: 4000, tags: 500 };
+const FACT_CAPS = { category: 200, content: 4000, tags: 500 };
 const sessionEmbText = (s) => [s.summary, s.what_was_built, s.decisions, s.next_steps, s.tags].filter(Boolean).join(' ');
 
-async function addSession(userId, { project, summary, what_was_built, decisions, stack, next_steps, tags }) {
+async function addSession(userId, { project, summary, what_was_built, decisions, stack, next_steps, tags, session_date }) {
   const projectId = await upsertProject(userId, cap(project, 100));
   const C = SESSION_CAPS;
   const { rows } = await pool.query(`
-    INSERT INTO sessions (user_id, project_id, summary, what_was_built, decisions, stack, next_steps, tags)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO sessions (user_id, project_id, summary, what_was_built, decisions, stack, next_steps, tags, session_date)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::TIMESTAMPTZ, NOW()))
     RETURNING id
-  `, [userId, projectId, cap(summary, C.summary), cap(what_was_built, C.what_was_built), cap(decisions, C.decisions), cap(stack, C.stack), cap(next_steps, C.next_steps), cap(tags, C.tags)]);
+  `, [userId, projectId, cap(summary, C.summary), cap(what_was_built, C.what_was_built), cap(decisions, C.decisions), cap(stack, C.stack), cap(next_steps, C.next_steps), cap(tags, C.tags), parseSessionDate(session_date)]);
   const id = rows[0].id;
   storeEmbedding(userId, 'session', id, sessionEmbText({ summary, what_was_built, decisions, next_steps, tags })); // fire and forget
   return id;
@@ -432,7 +466,7 @@ async function addFact(userId, { category, content, project, tags }) {
     INSERT INTO facts (user_id, project_id, category, content, tags)
     VALUES ($1, $2, $3, $4, $5)
     RETURNING id
-  `, [userId, projectId, cap(category, 200), cap(content, 4000), cap(tags, 500)]);
+  `, [userId, projectId, cap(category, FACT_CAPS.category), cap(content, FACT_CAPS.content), cap(tags, FACT_CAPS.tags)]);
   const id = rows[0].id;
   storeEmbedding(userId, 'fact', id, [category, content, tags].filter(Boolean).join(' ')); // fire and forget
   return id;
@@ -611,6 +645,7 @@ function welcomeEmailHtml({ name, apiKey }) {
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
 
 function send(res, status, body) {
+  if (res.headersSent) return;
   const payload = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(payload);
@@ -618,22 +653,45 @@ function send(res, status, body) {
 
 const MAX_BODY_BYTES = 64 * 1024; // 64KB — more than enough for any session dump
 
-function parseBody(req) {
+// Past this much an oversized body is no longer drained; the socket is closed
+// once the 413 has been written.
+const MAX_DRAIN_BYTES = 16 * 1024 * 1024;
+
+// An oversized body rejects with 413 straight away, but the socket is left
+// open and the rest of the body is read and discarded, so the client finishes
+// sending and actually receives the 413. Destroying the socket here made the
+// client see ECONNRESET and treat a bad request as "cloud down".
+function parseBody(req, res) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    const declared = parseInt(req.headers?.['content-length'] ?? '', 10);
+    const chunks = [];
     let size = 0;
+    let rejected = false;
+    const overflow = () => {
+      rejected = true;
+      chunks.length = 0;
+      reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+    };
+    const destroyAfterReply = () => {
+      if (req.destroyed) return;
+      if (!res || res.writableFinished) req.destroy();
+      else res.once('finish', () => req.destroy());
+    };
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) overflow();
     req.on('data', c => {
-      size += Buffer.byteLength(c);
-      if (size > MAX_BODY_BYTES) {
-        req.destroy();
-        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+      size += c.length;
+      if (rejected) {
+        if (size > MAX_DRAIN_BYTES) destroyAfterReply();
         return;
       }
-      raw += c;
+      if (size > MAX_BODY_BYTES) return overflow();
+      chunks.push(c);
     });
     req.on('end', () => {
-      try { resolve(JSON.parse(raw || '{}')); } catch { reject(Object.assign(new Error('Invalid JSON'), { statusCode: 400 })); }
+      if (rejected) return;
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); } catch { reject(Object.assign(new Error('Invalid JSON'), { statusCode: 400 })); }
     });
+    req.on('error', err => { if (!rejected) { rejected = true; reject(err); } });
   });
 }
 
@@ -650,6 +708,7 @@ async function start() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 
     // CORS
     if (method === 'OPTIONS') {
@@ -677,11 +736,11 @@ async function start() {
 
     // ── Public: Netlify webhook ──
     if (method === 'POST' && url.pathname === '/webhooks/beta-signup') {
-      if (!safeEqual(WEBHOOK_SECRET, webhookSecretFrom(req, url))) {
+      if (!safeEqual(WEBHOOK_SECRET, webhookSecretFrom(req))) {
         return send(res, 401, { error: 'Unauthorized' });
       }
       try {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         // Netlify sends form data under body.data or body.payload.data
         const data = body.data ?? body.payload?.data ?? body;
         if (data.email == null || data.email === '') return send(res, 400, { error: 'email missing from webhook payload' });
@@ -734,7 +793,7 @@ async function start() {
       const adminKey = req.headers['x-admin-key'];
       if (!safeEqual(ADMIN_KEY, adminKey)) return send(res, 401, { error: 'Unauthorized' });
       try {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         if (!body.email) return send(res, 400, { error: 'email required' });
         const email = normalizeEmail(body.email);
         if (!email) return send(res, 400, { error: 'invalid email' });
@@ -747,7 +806,8 @@ async function start() {
         if (err.code === '23505') return send(res, 409, { error: 'User with this email already exists' });
         if (err.statusCode) return send(res, err.statusCode, { error: err.message });
         log('error', 'Admin create user error', { err: err.message });
-        return send(res, 500, { error: err.message });
+        trackError(err.message);
+        return send(res, 500, { error: 'Internal server error' });
       }
     }
 
@@ -757,7 +817,7 @@ async function start() {
       const adminKey = req.headers['x-admin-key'];
       if (!safeEqual(ADMIN_KEY, adminKey)) return send(res, 401, { error: 'Unauthorized' });
       try {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         const email = normalizeEmail(body.email);
         if (!email) return send(res, 400, { error: 'valid email required' });
         const { rows: [u] } = await pool.query(
@@ -770,7 +830,8 @@ async function start() {
       } catch (err) {
         if (err.statusCode) return send(res, err.statusCode, { error: err.message });
         log('error', 'Admin resend welcome error', { err: err.message });
-        return send(res, 500, { error: err.message });
+        trackError(err.message);
+        return send(res, 500, { error: 'Internal server error' });
       }
     }
 
@@ -782,7 +843,7 @@ async function start() {
 
       // POST /feedback
       if (method === 'POST' && url.pathname === '/feedback') {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         if (typeof body.message !== 'string' || !body.message.trim()) return send(res, 400, { error: 'message is required' });
         if (body.type != null && typeof body.type !== 'string') return send(res, 400, { error: 'type must be a string' });
         const message = cap(body.message, 4000);
@@ -830,7 +891,7 @@ async function start() {
 
       // POST /session
       if (method === 'POST' && url.pathname === '/session') {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         if (!body.project || !body.summary) return send(res, 400, { error: 'project and summary are required' });
         const id = await addSession(user.id, body);
         return send(res, 201, { id, message: 'Session stored' });
@@ -838,7 +899,7 @@ async function start() {
 
       // POST /fact
       if (method === 'POST' && url.pathname === '/fact') {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         if (!body.category || !body.content) return send(res, 400, { error: 'category and content are required' });
         const id = await addFact(user.id, body);
         return send(res, 201, { id, message: 'Fact stored' });
@@ -960,11 +1021,18 @@ async function start() {
         const { rows: sessions } = await pool.query(`
           SELECT s.id::TEXT AS cloud_id, p.name AS project_name, s.summary,
                  s.what_was_built, s.decisions, s.stack, s.next_steps, s.tags,
-                 s.session_date::TEXT AS session_date, s.created_at::TEXT AS created_at
+                 s.session_date::TEXT AS session_date, s.created_at::TEXT AS created_at,
+                 s.updated_at::TEXT AS updated_at
           FROM sessions s
           JOIN projects p ON p.id = s.project_id
-          WHERE s.user_id = $1 AND s.created_at > $2
-          ORDER BY s.created_at ASC
+          WHERE s.user_id = $1 AND (s.created_at > $2 OR s.updated_at > $2)
+          ORDER BY GREATEST(s.created_at, s.updated_at) ASC
+        `, [user.id, since]);
+        const { rows: deleted_sessions } = await pool.query(`
+          SELECT session_id::TEXT AS cloud_id, deleted_at::TEXT AS deleted_at
+          FROM session_tombstones
+          WHERE user_id = $1 AND deleted_at > $2
+          ORDER BY deleted_at ASC
         `, [user.id, since]);
         const { rows: facts } = await pool.query(`
           SELECT f.id::TEXT AS cloud_id, p.name AS project_name, f.category,
@@ -974,29 +1042,47 @@ async function start() {
           WHERE f.user_id = $1 AND f.created_at > $2
           ORDER BY f.created_at ASC
         `, [user.id, since]);
-        return send(res, 200, { sessions, facts, exported_at: new Date().toISOString() });
+        return send(res, 200, { sessions, facts, deleted_sessions, exported_at: new Date().toISOString() });
       }
 
       // DELETE /session/:id — user deletes one of their own sessions
       const sessionIdMatch = url.pathname.match(/^\/session\/(\d+)$/);
       if (method === 'DELETE' && sessionIdMatch) {
         const sessionId = parseInt(sessionIdMatch[1], 10);
-        const { rowCount } = await pool.query(
-          'DELETE FROM sessions WHERE id = $1 AND user_id = $2',
-          [sessionId, user.id]
-        );
-        if (!rowCount) return send(res, 404, { error: 'Session not found or not yours' });
-        await pool.query(
-          "DELETE FROM embeddings WHERE user_id = $1 AND rowtype = 'session' AND row_id = $2",
-          [user.id, sessionId]
-        );
+        // Delete and tombstone together, so every synced machine learns of it.
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const { rowCount } = await client.query(
+            'DELETE FROM sessions WHERE id = $1 AND user_id = $2',
+            [sessionId, user.id]
+          );
+          if (!rowCount) {
+            await client.query('ROLLBACK');
+            return send(res, 404, { error: 'Session not found or not yours' });
+          }
+          await client.query(
+            'INSERT INTO session_tombstones (user_id, session_id) VALUES ($1, $2)',
+            [user.id, sessionId]
+          );
+          await client.query(
+            "DELETE FROM embeddings WHERE user_id = $1 AND rowtype = 'session' AND row_id = $2",
+            [user.id, sessionId]
+          );
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
+        } finally {
+          client.release();
+        }
         return send(res, 200, { ok: true });
       }
 
       // PATCH /session/:id — edit an existing session
       if (method === 'PATCH' && sessionIdMatch) {
         const sessionId = parseInt(sessionIdMatch[1], 10);
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         const allowed = ['summary', 'what_was_built', 'decisions', 'stack', 'next_steps', 'tags'];
         const sets = [];
         const vals = [];
@@ -1008,13 +1094,13 @@ async function start() {
         }
         if (sets.length === 0) return send(res, 400, { error: 'No valid fields to update' });
         const { rows: updated } = await pool.query(
-          `UPDATE sessions SET ${sets.join(', ')} WHERE id = $1 AND user_id = $2
-           RETURNING summary, what_was_built, decisions, next_steps, tags`,
+          `UPDATE sessions SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 AND user_id = $2
+           RETURNING summary, what_was_built, decisions, next_steps, tags, updated_at::TEXT AS updated_at`,
           [sessionId, user.id, ...vals]
         );
         if (!updated.length) return send(res, 404, { error: 'Session not found or not yours' });
         storeEmbedding(user.id, 'session', sessionId, sessionEmbText(updated[0])); // fire and forget, same as insert
-        return send(res, 200, { ok: true });
+        return send(res, 200, { ok: true, updated_at: updated[0].updated_at });
       }
 
       // GET /whats-next — most recent open next_steps per project
@@ -1036,7 +1122,7 @@ async function start() {
 
       // POST /intelligence — upsert project intelligence card
       if (method === 'POST' && url.pathname === '/intelligence') {
-        const body = await parseBody(req);
+        const body = await parseBody(req, res);
         if (!body.project) return send(res, 400, { error: 'project is required' });
         const { rows: [proj] } = await pool.query(
           `INSERT INTO projects (user_id, name) VALUES ($1, $2)
@@ -1085,9 +1171,9 @@ async function start() {
 }
 
 export {
-  escapeHtml, normalizeEmail, cleanName, parseLimit, parseSince, clientIp, hashApiKey,
+  escapeHtml, normalizeEmail, cleanName, parseLimit, parseSince, clientIp, normalizeIp, hashApiKey,
   webhookSecretFrom, safeEqual, checkRateLimit, pruneRateLimit, rateLimitMap, welcomeEmailHtml,
-  SESSION_CAPS, sessionEmbText,
+  SESSION_CAPS, FACT_CAPS, sessionEmbText, parseSessionDate, parseBody, MAX_BODY_BYTES,
 };
 
 // Only boot when run directly (node src/cloud-server.js), so tests can import the helpers.

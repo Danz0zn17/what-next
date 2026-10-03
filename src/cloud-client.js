@@ -60,15 +60,17 @@ async function fetchCloud(path, { timeoutMs = TIMEOUT_MS, ...options } = {}) {
     });
 
     if (res.status >= 500) {
-      throw new CloudUnavailableError(`Cloud server error: ${res.status}`);
+      throw Object.assign(new CloudUnavailableError(`Cloud server error: ${res.status}`), { statusCode: res.status });
     }
 
-    const body = await res.json();
     if (!res.ok) {
-      const err = new Error(body.error ?? `HTTP ${res.status}`);
+      // A 4xx from a proxy in front of the cloud may not be JSON; keep the status.
+      const body = await res.json().catch(() => ({}));
+      const err = new Error(body?.error ?? `HTTP ${res.status}`);
       err.statusCode = res.status;
       throw err;
     }
+    const body = await res.json();
 
     return body;
   } catch (err) {
@@ -99,17 +101,32 @@ export async function isReachable() {
   }
 }
 
+// The cloud's per-field caps (SESSION_CAPS / FACT_CAPS in cloud-server.js).
+// The server truncates to these anyway; trimming before sending keeps an
+// oversized local row under the request body limit so it still syncs.
+export const SESSION_CAPS = { project: 100, summary: 4000, what_was_built: 8000, decisions: 4000, stack: 1000, next_steps: 4000, tags: 500 };
+export const FACT_CAPS = { project: 100, category: 200, content: 4000, tags: 500 };
+
+export function trimToCaps(data, caps) {
+  if (!data || typeof data !== 'object') return data;
+  const out = { ...data };
+  for (const [field, max] of Object.entries(caps)) {
+    if (typeof out[field] === 'string' && out[field].length > max) out[field] = out[field].slice(0, max);
+  }
+  return out;
+}
+
 export async function postSession(data) {
   return fetchCloud('/session', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(trimToCaps(data, SESSION_CAPS)),
   });
 }
 
 export async function postFact(data) {
   return fetchCloud('/fact', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify(trimToCaps(data, FACT_CAPS)),
   });
 }
 
@@ -147,9 +164,9 @@ export async function exportSince(since) {
 }
 
 export async function editSession(id, updates) {
-  return fetchCloud(`/session/${id}`, {
+  return fetchCloud(`/session/${encodeURIComponent(id)}`, {
     method: 'PATCH',
-    body: JSON.stringify(updates),
+    body: JSON.stringify(trimToCaps(updates, SESSION_CAPS)),
   });
 }
 

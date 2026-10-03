@@ -14,7 +14,7 @@
  */
 
 import * as cloud from './cloud-client.js';
-import db, { getLastCloudSync, setLastCloudSync, upsertSessionFromCloud, upsertFactFromCloud, storeEmbedding, getAllEmbeddings, dedupeCloudEchoes, setSessionCloudId, setFactCloudId, getPendingGists } from './db.js';
+import db, { getLastCloudSync, setLastCloudSync, upsertSessionFromCloud, upsertFactFromCloud, storeEmbedding, dedupeCloudEchoes, setSessionCloudId, setFactCloudId, getPendingGists, markSyncError, getDirtySessions, markSessionSynced, deleteSessionByCloudId, parseCloudTimestamp } from './db.js';
 import { findLocalTwin } from './gist-client.js';
 
 // Embeddings require native onnxruntime binaries and can be slow/dataless on
@@ -43,26 +43,23 @@ const PUSH_BATCH = 25;
 // cloud id instead of being pushed again.
 const RECONCILED_KEY = 'push_reconciled';
 
-// Rows the cloud rejected with a 4xx this process; skipped so they cannot
-// block the batch every cycle.
-const rejected = { session: new Set(), fact: new Set() };
+// A 4xx rejection is persisted on the row (sync_error) and survives restarts.
+// Rows that failed some other way (a non-HTTP error) are only skipped for the
+// life of this process.
+const rejected = { session: new Set(), fact: new Set(), edit: new Set() };
 
-// Cloud created_at comes back as Postgres text ("2026-09-27 10:00:00.123456+00").
-export function parseCloudTimestamp(value) {
-  if (!value || typeof value !== 'string') return NaN;
-  let v = value.trim().replace(' ', 'T');
-  v = v.replace(/(\.\d{3})\d+/, '$1');
-  v = v.replace(/([+-]\d{2})$/, '$1:00');
-  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(v)) v += 'Z';
-  return Date.parse(v);
-}
+// Cloud timestamps come back as Postgres text ("2026-09-27 10:00:00.123456+00").
+export { parseCloudTimestamp };
 
-// Next cursor: newest created_at received, else the server's exported_at,
-// else unchanged. Always minus the overlap window.
+// Next cursor: newest created_at / updated_at / deleted_at received, else the
+// server's exported_at, else unchanged. Always minus the overlap window.
 export function nextCursor(data, previous) {
   let max = NaN;
-  for (const row of [...(data?.sessions ?? []), ...(data?.facts ?? [])]) {
-    const t = parseCloudTimestamp(row.created_at);
+  const stamps = [];
+  for (const row of [...(data?.sessions ?? []), ...(data?.facts ?? [])]) stamps.push(row.created_at, row.updated_at);
+  for (const row of data?.deleted_sessions ?? []) stamps.push(row.deleted_at);
+  for (const stamp of stamps) {
+    const t = parseCloudTimestamp(stamp);
     if (Number.isFinite(t) && !(t <= max)) max = t;
   }
   if (!Number.isFinite(max)) max = parseCloudTimestamp(data?.exported_at);
@@ -94,56 +91,93 @@ function compact(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== null && v !== undefined));
 }
 
-async function pushOne(kind, row, post, setCloudId) {
+// 401 (bad or revoked key) and 429 (rate limited) say nothing about the row
+// being sent: stop the cycle and retry next time, exactly like an outage.
+function stopsCycle(err) {
+  return err instanceof cloud.CloudUnavailableError || err?.statusCode === 401 || err?.statusCode === 429;
+}
+
+const TABLE = { session: 'sessions', edit: 'sessions', fact: 'facts' };
+
+async function pushOne(kind, row, send, onSuccess) {
   try {
-    const res = await post();
-    if (res?.id) {
-      setCloudId(row.id, res.id);
-      return true;
-    }
+    return onSuccess(await send()) === true;
   } catch (err) {
-    if (err instanceof cloud.CloudUnavailableError) throw err;
-    rejected[kind].add(row.id);
+    if (stopsCycle(err)) throw err;
+    const status = err?.statusCode;
+    if (Number.isInteger(status) && status >= 400 && status < 500) {
+      markSyncError(TABLE[kind], row.id, `${status}: ${err.message}`);
+    } else {
+      rejected[kind].add(row.id);
+    }
     process.stderr.write(`[sync] Cloud rejected local ${kind} ${row.id}: ${err.message}\n`);
   }
   return false;
 }
 
-// Push locally written rows (cloud_id IS NULL) the cloud never got. Cloud-pulled
-// rows always carry a cloud_id, so only local writes match.
+// Local session_date ("2026-09-27 10:00:00", UTC) as ISO for the cloud.
+function isoDate(value) {
+  const t = parseCloudTimestamp(value);
+  return Number.isFinite(t) ? new Date(t).toISOString() : undefined;
+}
+
+// Push locally written rows (cloud_id IS NULL) the cloud never got, then local
+// edits of rows the cloud already has. Cloud-pulled rows always carry a
+// cloud_id, so only local writes match the first query.
 export async function pushToCloud({ batch = PUSH_BATCH, minAgeMinutes = PUSH_MIN_AGE_MINUTES } = {}) {
   const age = `-${Number(minAgeMinutes)} minutes`;
   let pushed = 0;
   try {
     const skipGists = pendingGistSessionIds();
     const sessions = db.prepare(`
-      SELECT s.id, p.name AS project, s.summary, s.what_was_built, s.decisions, s.stack, s.next_steps, s.tags
+      SELECT s.id, p.name AS project, s.summary, s.what_was_built, s.decisions, s.stack, s.next_steps, s.tags, s.session_date
       FROM sessions s JOIN projects p ON p.id = s.project_id
-      WHERE s.cloud_id IS NULL AND COALESCE(julianday(s.created_at), 0) <= julianday('now', ?)
+      WHERE s.cloud_id IS NULL AND s.sync_error IS NULL AND COALESCE(julianday(s.created_at), 0) <= julianday('now', ?)
       ORDER BY s.id ASC LIMIT ?
     `).all(age, batch + rejected.session.size + skipGists.size)
       .filter(r => !rejected.session.has(r.id) && !skipGists.has(r.id))
       .slice(0, batch);
     for (const row of sessions) {
-      const { id, ...body } = row;
-      if (await pushOne('session', row, () => cloud.postSession(compact(body)), setSessionCloudId)) pushed++;
+      const { id, session_date, ...body } = row;
+      const payload = compact({ ...body, session_date: isoDate(session_date) });
+      if (await pushOne('session', row, () => cloud.postSession(payload), res => {
+        if (!res?.id) return false;
+        setSessionCloudId(id, res.id);
+        return true;
+      })) pushed++;
     }
 
     const facts = db.prepare(`
       SELECT f.id, p.name AS project, f.category, f.content, f.tags
       FROM facts f LEFT JOIN projects p ON p.id = f.project_id
-      WHERE f.cloud_id IS NULL AND f.status = 'active' AND COALESCE(julianday(f.created_at), 0) <= julianday('now', ?)
+      WHERE f.cloud_id IS NULL AND f.sync_error IS NULL AND f.status = 'active' AND COALESCE(julianday(f.created_at), 0) <= julianday('now', ?)
       ORDER BY f.id ASC LIMIT ?
     `).all(age, batch + rejected.fact.size)
       .filter(r => !rejected.fact.has(r.id))
       .slice(0, batch);
     for (const row of facts) {
       const { id, ...body } = row;
-      if (await pushOne('fact', row, () => cloud.postFact(compact(body)), setFactCloudId)) pushed++;
+      if (await pushOne('fact', row, () => cloud.postFact(compact(body)), res => {
+        if (!res?.id) return false;
+        setFactCloudId(id, res.id);
+        return true;
+      })) pushed++;
+    }
+
+    const edits = getDirtySessions(batch + rejected.edit.size)
+      .filter(r => !rejected.edit.has(r.id))
+      .slice(0, batch);
+    for (const row of edits) {
+      const { id, cloud_id, updated_at, ...fields } = row;
+      if (await pushOne('edit', row, () => cloud.editSession(cloud_id, fields), res => {
+        if (!res?.ok) return false;
+        markSessionSynced(id, updated_at, res.updated_at);
+        return true;
+      })) pushed++;
     }
   } catch (err) {
-    if (!(err instanceof cloud.CloudUnavailableError)) throw err;
-    process.stderr.write(`[sync] Push stopped, cloud unavailable: ${err.message}\n`);
+    if (!stopsCycle(err)) throw err;
+    process.stderr.write(`[sync] Push stopped until next cycle: ${err.message}\n`);
   }
   if (pushed > 0) process.stderr.write(`[sync] Pushed ${pushed} local row(s) to cloud\n`);
   return pushed;
@@ -171,16 +205,15 @@ export async function syncFromCloud() {
     const sessions = data.sessions ?? [];
     const facts = data.facts ?? [];
 
-    const existingEmbeddings = new Set(
-      getAllEmbeddings().map(e => `${e.rowtype}:${e.row_id}`)
-    );
     const generateEmbedding = await getGenerateEmbedding();
 
+    // A returned id is a row inserted, or rewritten by a newer cloud edit (which
+    // drops its old embedding); both need a fresh embedding.
     let inserted = 0;
     for (const session of sessions) {
       const localId = upsertSessionFromCloud(session);
       if (localId) inserted++;
-      if (generateEmbedding && localId && !existingEmbeddings.has(`session:${localId}`)) {
+      if (generateEmbedding && localId) {
         const text = [session.summary, session.what_was_built, session.decisions, session.next_steps, session.tags].filter(Boolean).join(' ');
         generateEmbedding(text).then(emb => storeEmbedding('session', localId, emb)).catch(() => {});
       }
@@ -188,10 +221,15 @@ export async function syncFromCloud() {
     for (const fact of facts) {
       const localId = upsertFactFromCloud(fact);
       if (localId) inserted++;
-      if (generateEmbedding && localId && !existingEmbeddings.has(`fact:${localId}`)) {
+      if (generateEmbedding && localId) {
         const text = [fact.category, fact.content, fact.tags].filter(Boolean).join(' ');
         generateEmbedding(text).then(emb => storeEmbedding('fact', localId, emb)).catch(() => {});
       }
+    }
+
+    let deleted = 0;
+    for (const tomb of data.deleted_sessions ?? []) {
+      if (deleteSessionByCloudId(tomb.cloud_id)) deleted++;
     }
 
     const cursor = nextCursor(data, getLastCloudSync());
@@ -199,8 +237,9 @@ export async function syncFromCloud() {
     if (!reconciled) setSyncFlag(RECONCILED_KEY, new Date().toISOString());
 
     if (inserted > 0) {
-      process.stderr.write(`[sync] Pulled ${inserted} new row(s) from cloud (${sessions.length + facts.length} returned)\n`);
+      process.stderr.write(`[sync] Pulled ${inserted} new or edited row(s) from cloud (${sessions.length + facts.length} returned)\n`);
     }
+    if (deleted > 0) process.stderr.write(`[sync] Removed ${deleted} session(s) deleted in the cloud\n`);
 
     // Pull first so echoes of rows already in the cloud adopt their id, then push.
     await pushToCloud();

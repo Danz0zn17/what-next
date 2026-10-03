@@ -7,7 +7,7 @@
  *
  * Requires: GITHUB_TOKEN env var (fine-grained PAT with Gist write permission)
  */
-import db, { storePendingGist, getPendingGists, deletePendingGist, setSessionCloudId } from './db.js';
+import db, { storePendingGist, getPendingGists, deletePendingGist, setSessionCloudId, markPendingGistRejected } from './db.js';
 import * as cloud from './cloud-client.js';
 import { sanitizeFields, SESSION_TEXT_FIELDS } from './sanitize.js';
 
@@ -89,8 +89,16 @@ export async function syncPending() {
   console.error(`[gist] Syncing ${pending.length} pending gist(s) to cloud...`);
 
   for (const row of pending) {
+    let payload;
     try {
-      const payload = JSON.parse(row.payload);
+      payload = JSON.parse(row.payload);
+    } catch {
+      // Unreadable payload can never sync; keep the GitHub copy, stop retrying.
+      markPendingGistRejected(row.id, 'invalid payload');
+      console.error(`[gist] Gist ${row.gist_id} has an unreadable payload; no longer retried`);
+      continue;
+    }
+    try {
       const twin = findLocalTwin(payload);
       if (twin?.cloud_id) {
         // Already reached the cloud (write-through retry or the sync push step).
@@ -116,8 +124,21 @@ export async function syncPending() {
       console.error(`[gist] Synced and deleted gist: ${row.gist_id}`);
     } catch (err) {
       console.error(`[gist] Failed to sync gist ${row.gist_id}:`, err.message);
-      // Cloud went away mid-flush: stop instead of waiting out a timeout per row.
-      if (err instanceof cloud.CloudUnavailableError) break;
+      const status = err?.statusCode;
+      if (err instanceof cloud.CloudUnavailableError) {
+        // A 5xx on this one payload while the cloud is up: keep it for next
+        // time but carry on with the rest. Cloud gone: stop the flush.
+        if (status >= 500 && await cloud.isReachable()) continue;
+        break;
+      }
+      // 401 / 429 are about the key or the rate, not this gist: try again later.
+      if (status === 401 || status === 429) break;
+      // Any other 4xx: the cloud will never accept this payload. Stop retrying
+      // it; the GitHub gist is kept, and the local session (if any) is pushed
+      // by the regular sync, which trims fields to the cloud's caps first.
+      if (Number.isInteger(status) && status >= 400 && status < 500) {
+        markPendingGistRejected(row.id, `${status}: ${err.message}`);
+      }
     }
   }
 }
