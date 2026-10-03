@@ -1,6 +1,6 @@
 {
   "name": "whatnext-ai",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "What Next — AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
   "license": "MIT",
   "type": "module",
@@ -29,7 +29,7 @@
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^12.11.1",
     "pg": "^8.20.0",
     "playwright": "^1.58.2",
     "zod": "^4.3.6"

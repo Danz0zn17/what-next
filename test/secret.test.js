@@ -84,6 +84,33 @@ test('guard allows normal work and safe secret handling', () => {
   ]) assert.equal(bash(cmd), null, `should allow: ${cmd}`);
 });
 
+test('guard ignores secret commands that only appear as data', () => {
+  for (const cmd of [
+    `echo '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}' | node wn.js guard`,
+    `git commit -m "docs: never run cat .env or printenv"`,
+    `python3 - <<'EOF'\ns = "cat .env and plutil -p x.plist"\nEOF\necho done`,
+    `cat > notes.md <<EOF\nrun printenv to debug\nEOF`,
+  ]) assert.equal(bash(cmd), null, `should allow: ${cmd}`);
+  for (const cmd of [
+    `bash -c 'cat .env'`, `sh <<EOF\ncat .env\nEOF`, `cat "my app/.env"`, `echo "key is $STRIPE_SECRET_KEY"`,
+    `python3 -c "print(open('.env').read())"`,
+  ]) assert.ok(bash(cmd), `should block: ${cmd}`);
+});
+
+test('guard blocks AI tool configs only when they hold keys', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wn-guard-test-'));
+  writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ servers: { x: { env: { WHATNEXT_API_KEY: 'bak_' + 'a'.repeat(40) } } } }));
+  writeFileSync(join(dir, 'claude_desktop_config.json'), JSON.stringify({ mcpServers: { x: { command: 'node', args: ['a.js'] } } }));
+  const read = (file_path) => guardCheck({ tool_name: 'Read', cwd: dir, tool_input: { file_path } });
+  const run = (command) => guardCheck({ tool_name: 'Bash', cwd: dir, tool_input: { command } });
+  assert.ok(read(join(dir, 'mcp.json')));
+  assert.equal(read(join(dir, 'claude_desktop_config.json')), null);
+  assert.ok(run('cat mcp.json'));
+  assert.ok(run(`jq . ${join(dir, 'mcp.json')}`));
+  assert.equal(run('cat claude_desktop_config.json'), null);
+  assert.equal(run('ls mcp.json'), null);
+});
+
 test('guard blocks reading .env and key files with file tools', () => {
   assert.ok(guardCheck({ tool_name: 'Read', tool_input: { file_path: '/p/.env' } }));
   assert.ok(guardCheck({ tool_name: 'Read', tool_input: { file_path: '/p/.env.local' } }));

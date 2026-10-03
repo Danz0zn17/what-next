@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-10-03
+
+### Fixed
+- **Installs on Node 26**: `better-sqlite3` 11 does not compile on Node 26, so `npm install -g whatnext-ai`
+  failed there. Upgraded to `better-sqlite3` 12.11, which supports Node 20 to 26. Tested on Node 22 and 26.
+- `wn guard` no longer blocks commands that only mention a secret command as data, such as a commit
+  message or a quoted JSON payload. Heredocs and quoted text fed to a shell, `-c` or `-e` are still checked.
+
+### Security
+- `wn guard` blocks reading AI tool configs (`mcp.json`, `claude_desktop_config.json`, `.claude.json`,
+  `~/.codex/config.toml`) when they contain API keys or tokens. Configs without secrets stay readable.
+
 ## [2.3.1] - 2026-10-03
 
 ### Security

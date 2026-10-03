@@ -265,7 +265,9 @@ export function checkSecret(opts) {
 
 const SAFE_ENV_FILE = /\.env\.(example|sample|template|dist|defaults)$/i;
 const ENV_FILE = /(^|[\s/'"=<])\.env(\.[\w.-]+)?(?=$|[\s'";|&)>])/g;
-const SECRET_VAR = /\$\{?[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|DSN)[A-Z0-9_]*\}?/;
+const AGENT_CONFIG = /(mcp\.json|mcp_config\.json|claude_desktop_config\.json|\.claude\.json|\.codex\/config\.toml)$/;
+const AGENT_CONFIG_IN_CMD = /[^\s'"]*(mcp\.json|mcp_config\.json|claude_desktop_config\.json|\.claude\.json|\.codex\/config\.toml)(?=$|[\s'";|&)>])/g;
+const SECRET_VALUE = /\b(bak_|sk-|sk_live_|sk_test_|rk_live_|ghp_|gho_|github_pat_|xox[abp]-|glpat-|AKIA|eyJ)[A-Za-z0-9_-]{12,}|["']?[A-Za-z0-9_]*(KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?[^"'\s,{}$]{12,}/i;
 
 const BASH_RULES = [
   [/(^|[;&|(]\s*|\bsudo\s+)(printenv|env|export\s+-p|set|declare\s+-x)\s*($|[;&|)])/, 'prints every environment variable'],
@@ -291,14 +293,50 @@ function envFilesIn(cmd) {
   return [...cmd.matchAll(ENV_FILE)].map(m => m[0].replace(/^[\s/'"=<]/, '')).filter(f => !SAFE_ENV_FILE.test(f));
 }
 
+/**
+ * Drops what a command only carries as data - heredoc bodies and multi-word quoted strings - so that
+ * mentioning `cat .env` inside a JSON test payload or a script body does not trip the guard.
+ * Heredocs fed to a shell, strings after -c/-e/eval and double-quoted strings that expand $VARS are kept.
+ * With keepPaths, quoted paths that contain spaces ("my app/.env") are kept too.
+ */
+export function codeOnly(cmd, { keepPaths = false } = {}) {
+  const noHeredocs = cmd.replace(/^(.*?)<<-?\s*(['"]?)(\w+)\2([^\n]*)\n[\s\S]*?\n[ \t]*\3[ \t]*(?=\n|$)/gm,
+    (m, head, _q, _tag, rest) => (/\b(bash|sh|zsh|dash|source|eval)\b/.test(head) ? m : `${head}${rest}`));
+  const isPath = (s) => /^[^{}]*\/[^/\s]+$/.test(s);
+  return noHeredocs.replace(/(-c|-e|eval)?(\s*)('[^']*'|"(?:[^"\\]|\\.)*")/g, (m, flag, sp, str) => {
+    const body = str.slice(1, -1);
+    return flag || !/\s/.test(body) || (str[0] === '"' && body.includes('$')) || (keepPaths && isPath(body)) ? m : `${sp}''`;
+  });
+}
+
+/** True when a local file looks like it holds a key or token. Unreadable files count as secret. */
+export function fileHasSecrets(path) {
+  try {
+    return SECRET_VALUE.test(readFileSync(path, 'utf8').slice(0, 1_000_000));
+  } catch (e) {
+    return e.code !== 'ENOENT';
+  }
+}
+
+function resolveFrom(cwd, p) {
+  const home = process.env.HOME ?? '';
+  const expanded = p.replace(/^~(?=\/)/, home).replace(/^\$\{?HOME\}?(?=\/)/, home);
+  return expanded.startsWith('/') ? expanded : join(cwd ?? process.cwd(), expanded);
+}
+
 /** Returns a reason string when the tool call would expose a secret, else null. */
 export function guardCheck(event) {
   const tool = event?.tool_name;
   const input = event?.tool_input ?? {};
   if (tool === 'Bash') {
-    const cmd = String(input.command ?? '');
+    const raw = String(input.command ?? '');
+    const cmd = codeOnly(raw);
     for (const [re, why] of BASH_RULES) if (re.test(cmd)) return why;
-    if (envFilesIn(cmd).length && READERS.test(cmd)) return 'reads a .env file';
+    if (!READERS.test(cmd)) return null;
+    const files = codeOnly(raw, { keepPaths: true });
+    if (envFilesIn(files).length) return 'reads a .env file';
+    const configs = [...files.matchAll(AGENT_CONFIG_IN_CMD)].map(m => resolveFrom(event.cwd, m[0]));
+    if (configs.some(p => !existsSync(p) || fileHasSecrets(p))) return 'reads an AI tool config that holds API keys';
     return null;
   }
   if (tool === 'Read' || tool === 'Grep' || tool === 'NotebookRead') {
@@ -307,6 +345,7 @@ export function guardCheck(event) {
     if (/^\.env(\.|$)/.test(b) && !SAFE_ENV_FILE.test(b)) return 'reads a .env file';
     if (tool === 'Grep' && /^\.env/.test(String(input.glob ?? '')) && !SAFE_ENV_FILE.test(String(input.glob))) return 'reads a .env file';
     if (/\.(pem|p12|pfx|key)$/i.test(b) || /^id_(rsa|ed25519|ecdsa)$/.test(b)) return 'reads a private key file';
+    if (AGENT_CONFIG.test(p) && fileHasSecrets(resolveFrom(event.cwd, p))) return 'reads an AI tool config that holds API keys';
   }
   return null;
 }

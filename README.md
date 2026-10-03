@@ -326,9 +326,11 @@ wn guard install
 ```
 
 Adds a hook to `~/.claude/settings.json` (backed up first) that stops Claude Code from reading `.env`
-files and private keys, dumping the environment, echoing `$..._KEY` variables, or listing platform
-env vars with values. The block message tells Claude to use `wn secret` instead. `.env.example` and
-presence checks like `[ -n "$KEY" ]` still work.
+files and private keys, reading AI tool configs that hold API keys (`mcp.json`,
+`claude_desktop_config.json`, `~/.codex/config.toml`), dumping the environment, echoing `$..._KEY`
+variables, or listing platform env vars with values. The block message tells Claude to use `wn secret`
+instead. `.env.example`, presence checks like `[ -n "$KEY" ]`, and commands that only mention these
+in a commit message or quoted text still work. It is a guardrail against accidents, not a sandbox.
 
 Tip: add this line to your `CLAUDE.md` so the agent never asks you to paste a key:
 `Never ask me to paste a secret into chat - run wn secret NAME --to <targets> --url <where to get it>.`
