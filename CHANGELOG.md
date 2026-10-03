@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-03
+
 ### Added
 - **`wn secret`**: enter API keys in a separate terminal window with hidden input, written straight
   to `.env`, Netlify, Railway, Vercel, Supabase, GitHub Actions or the macOS Keychain. The AI agent
