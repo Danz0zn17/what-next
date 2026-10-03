@@ -297,6 +297,44 @@ Short aliases: `ctx`, `n`, `ps`, `p`, `s`, `d`, `f`, `i`. Colour output is TTY-a
 
 ---
 
+## Keep secrets out of the AI chat
+
+AI coding agents leak API keys in two ways: you paste a key into the chat, or the agent runs a
+command that prints one (`cat .env`, `printenv`, `railway variables`). Either way the key is now in a
+transcript and should be rotated. What Next closes both paths.
+
+**Enter secrets in a separate window.** When a project needs a key, the agent runs:
+
+```bash
+wn secret STRIPE_SECRET_KEY --to env,netlify,railway --url https://dashboard.stripe.com/apikeys
+```
+
+What Next opens the dashboard page and a new terminal window. You paste the value there (input is
+hidden), it is written to each destination, and the agent only sees
+`STRIPE_SECRET_KEY: SET (env, netlify, railway)`.
+
+Targets: `env` (`.env` in the current folder, or `--env-file`), `netlify`, `railway`, `vercel`,
+`supabase` (edge function secrets), `github` (Actions secrets), `keychain` (macOS). Each uses that
+platform's own CLI, so it must be installed and linked to the project. Check presence without
+revealing anything with `wn secret STRIPE_SECRET_KEY --check`. A new terminal window opens on macOS
+and most Linux desktops; elsewhere the agent gives you a command to run in your own terminal.
+
+**Block commands that print secrets (Claude Code).**
+
+```bash
+wn guard install
+```
+
+Adds a hook to `~/.claude/settings.json` (backed up first) that stops Claude Code from reading `.env`
+files and private keys, dumping the environment, echoing `$..._KEY` variables, or listing platform
+env vars with values. The block message tells Claude to use `wn secret` instead. `.env.example` and
+presence checks like `[ -n "$KEY" ]` still work.
+
+Tip: add this line to your `CLAUDE.md` so the agent never asks you to paste a key:
+`Never ask me to paste a secret into chat - run wn secret NAME --to <targets> --url <where to get it>.`
+
+---
+
 ## Optional: Hermes (Telegram Bot)
 
 If you're running [Hermes](https://github.com/Danz0zn17/hermes) as your AI Telegram bot, add What Next to `~/.hermes/config.yaml`:

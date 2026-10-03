@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **`wn secret`**: enter API keys in a separate terminal window with hidden input, written straight
+  to `.env`, Netlify, Railway, Vercel, Supabase, GitHub Actions or the macOS Keychain. The AI agent
+  that ran the command only sees `SET` or `NOT SET`, never the value. `--check` reports presence only.
+- **`wn guard install`**: Claude Code hook that blocks commands and file reads that would print
+  secrets into the chat (`.env` reads, `printenv`, echoing `$..._KEY`, `railway variables`,
+  `netlify env:list`, keychain passwords) and points the agent at `wn secret` instead.
+
 ## [2.2.0] - 2026-09-27
 
 ### Packaging

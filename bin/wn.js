@@ -21,7 +21,12 @@
 import { createInterface } from 'readline';
 import { spawnSync } from 'child_process';
 import { basename } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { parseSecretArgs, launchSecret, enterSecret, checkSecret, runGuard, addGuardHook, TARGETS } from '../src/secret.js';
+import { backupFile } from './install.js';
 
 const PORT = Number(process.env.WHATNEXT_PORT) || 3747;
 const BASE = `http://localhost:${PORT}`;
@@ -306,6 +311,45 @@ function cmdInstall(args) {
   process.exit(result.status ?? 0);
 }
 
+async function cmdSecret(args) {
+  let opts;
+  try {
+    opts = parseSecretArgs(args);
+  } catch (e) {
+    console.error(col('red', `\n${e.message}`));
+    console.error(dim(`  Usage: wn secret NAME [--to ${TARGETS.join(',')}] [--url <where to get it>] [--env-file .env] [--check]\n`));
+    process.exit(1);
+  }
+  if (opts.check) process.exit(checkSecret(opts));
+  if (opts.here) {
+    const result = await enterSecret(opts);
+    process.exit(result.cancelled ? 1 : 0);
+  }
+  process.exit(await launchSecret(opts, fileURLToPath(import.meta.url)));
+}
+
+async function cmdGuard(args) {
+  if (args[0] !== 'install') process.exit(await runGuard());
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  let settings = {};
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    } catch {
+      console.error(col('red', `\nCould not parse ${settingsPath}. Fix the JSON and retry.\n`));
+      process.exit(1);
+    }
+  }
+  const command = `"${process.execPath}" "${fileURLToPath(import.meta.url)}" guard`;
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  const backup = backupFile(settingsPath);
+  writeFileSync(settingsPath, JSON.stringify(addGuardHook(settings, command), null, 2) + '\n');
+  console.log(col('green', '\n  Secret guard installed for Claude Code'));
+  console.log(dim(`  Settings: ${settingsPath}`));
+  if (backup) console.log(dim(`  Backup:   ${backup}`));
+  console.log(dim('  Start a new Claude Code session for it to take effect.\n'));
+}
+
 function printHelp() {
   console.log(`
 ${bold('wn')} — What Next CLI  ${dim(`(localhost:${PORT})`)}
@@ -321,6 +365,8 @@ ${bold('Commands:')}
   ${col('cyan', 'wn status')}                      Health check: local + cloud
   ${col('cyan', 'wn open')}                        Open web UI in browser
   ${col('cyan', 'wn install')} ${col('yellow', '--client <x> --key <k>')}  Run MCP installer
+  ${col('cyan', 'wn secret')} ${col('yellow', '<NAME> --to env,netlify')}  Enter a secret in a separate terminal, never in chat
+  ${col('cyan', 'wn guard install')}               Stop Claude Code printing secrets (adds a hook)
 
 ${bold('Examples:')}
   wn search "supabase auth"
@@ -349,6 +395,8 @@ switch (cmd) {
   case 'status':   await cmdStatus();             break;
   case 'open':     await cmdOpen();               break;
   case 'install':  cmdInstall(rest);              break;
+  case 'secret':   await cmdSecret(rest);         break;
+  case 'guard':    await cmdGuard(rest);          break;
   case '--version': case '-v': case 'version':   console.log(`wn v${VERSION}`); break;
   case '--help':
   case '-h':
