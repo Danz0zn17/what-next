@@ -23,6 +23,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { updateCommand } from '../src/update-check.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(join(__dirname, '..'));
@@ -70,10 +71,7 @@ export async function checkForUpdate() {
         writeFileSync(FLAG, latestClean);
         process.stderr.write(
           `\n[what-next] Update available: v${current} → v${latestClean}\n` +
-          `[what-next] To update:\n` +
-          `[what-next]   cd ${ROOT}\n` +
-          `[what-next]   git pull && npm install\n` +
-          `[what-next]   node bin/install.js --client <claude|vscode|codex> --key bak_xxx\n\n`
+          `[what-next] To update: ${updateCommand(ROOT)}\n\n`
         );
       }
     } else {

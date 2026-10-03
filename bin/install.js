@@ -454,7 +454,7 @@ async function main() {
       console.log('  If the tool list is still empty, verify your Claude Desktop config path:');
       console.log('    cat "' + configPath + '"');
       console.log('  Some Linux builds use a different path. If yours differs, set XDG_CONFIG_HOME:');
-      console.log('    XDG_CONFIG_HOME=/your/path node bin/install.js --client claude --key ' + apiKey);
+      console.log('    XDG_CONFIG_HOME=/your/path node bin/install.js --client claude --key <your bak_ key>');
     }
     console.log('\nOptional local web UI/API:');
     console.log(`  node ${apiPath}`);
@@ -498,7 +498,9 @@ function setupMacOSLaunchAgent(key) {
 
     // Backup kept outside LaunchAgents so launchd never loads a second copy.
     const backup = backupFile(plistPath, { backupDir: join(H, '.whatnext', 'backups') });
-    writeFileSync(plistPath, plistXml);
+    // The plist holds the API key: owner-only, like the systemd unit
+    writeFileSync(plistPath, plistXml, { mode: 0o600 });
+    chmodSync(plistPath, 0o600);
 
     // Load and start the service
     execFileSync('launchctl', ['load', plistPath]);
@@ -515,6 +517,7 @@ function setupMacOSLaunchAgent(key) {
     console.error('\nLaunchAgent setup failed:', err.message);
     console.error('To set it up manually:');
     console.error(`  launchctl load "${plistPath}"\n`);
+    process.exitCode = 1;
   }
 }
 

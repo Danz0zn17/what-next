@@ -26,7 +26,8 @@ fi
 if [[ ! -f "$WHATNEXT_ROOT/src/api-server.js" ]]; then
   if [[ -d "$WHATNEXT_ROOT/.git" ]]; then
     echo "[start-api.sh] src/api-server.js missing - restoring from git" >&2
-    (cd "$WHATNEXT_ROOT" && git fetch --quiet && git checkout main --force) 2>&1
+    # Restore only deleted tracked files: never switch branch or discard local edits
+    (cd "$WHATNEXT_ROOT" && git ls-files -d -z | xargs -0 git checkout HEAD --) 2>&1
   fi
   if [[ ! -f "$WHATNEXT_ROOT/src/api-server.js" ]]; then
     echo "[start-api.sh] FATAL: $WHATNEXT_ROOT/src/api-server.js not found - reinstall What Next" >&2
@@ -40,13 +41,13 @@ if [[ ! -d "$WHATNEXT_ROOT/node_modules/better-sqlite3" ]]; then
   (cd "$WHATNEXT_ROOT" && npm install --quiet) 2>&1
 fi
 
-# 3. Wait up to 15s for network on a fresh boot (cloud sync is optional; the API starts regardless)
-for i in $(seq 1 15); do
-  if /usr/bin/curl -sf --max-time 2 "${WHATNEXT_CLOUD_URL:-https://what-next-production.up.railway.app}/health" >/dev/null 2>&1; then
+# 3. Wait up to ~15s for network on a fresh boot (cloud sync is optional; the API starts regardless)
+for i in $(seq 1 10); do
+  if /usr/bin/curl -sf --max-time 1 "${WHATNEXT_CLOUD_URL:-https://what-next-production.up.railway.app}/health" >/dev/null 2>&1; then
     echo "[start-api.sh] Network ready (attempt $i)" >&2
     break
   fi
-  sleep 1
+  sleep 0.5
 done
 
 # 4. Start the server via bootstrap-entry.js (handles EAGAIN retry). db.js creates the DB if needed.

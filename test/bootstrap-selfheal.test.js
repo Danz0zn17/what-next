@@ -87,13 +87,20 @@ test('bootstrap self-heal: wrapper exits 0 after clean install', async () => {
   }
 
   const { spawn } = await import('node:child_process');
-  const { existsSync, renameSync, mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { existsSync, renameSync, mkdtempSync, readFileSync, rmSync, cpSync } = await import('node:fs');
   const { resolve, dirname, join } = await import('node:path');
   const { tmpdir } = await import('node:os');
   const { fileURLToPath } = await import('node:url');
 
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const ROOT = resolve(__dirname, '..');
+  // Work on a private copy of the package: corrupting the shared node_modules
+  // broke every other test that spawns the MCP server while this one ran.
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const ROOT = mkdtempSync(join(tmpdir(), 'whatnext-selfheal-root-'));
+  for (const f of ['bin', 'src', 'package.json', 'package-lock.json']) cpSync(join(REPO, f), join(ROOT, f), { recursive: true });
+  // APFS clone on macOS is near-instant; a plain copy elsewhere
+  const cloned = process.platform === 'darwin'
+    && spawnSync('cp', ['-cR', join(REPO, 'node_modules'), ROOT]).status === 0;
+  if (!cloned) cpSync(join(REPO, 'node_modules'), join(ROOT, 'node_modules'), { recursive: true });
   const serverDir = resolve(ROOT, 'node_modules/@modelcontextprotocol/sdk/dist/esm/server');
   const backupDir = serverDir + '.bak';
 
@@ -155,7 +162,9 @@ test('bootstrap self-heal: wrapper exits 0 after clean install', async () => {
       // npm install already restored it; remove the backup
       rmSync(backupDir, { recursive: true, force: true });
     }
+    const restored = existsSync(serverDir);
     rmSync(logDir, { recursive: true, force: true });
-    assert.ok(existsSync(serverDir), 'SDK server dir must be restored after test');
+    rmSync(ROOT, { recursive: true, force: true });
+    assert.ok(restored, 'SDK server dir must be restored after test');
   }
 });
