@@ -43,7 +43,7 @@ function latestNextSteps(project) {
 
 const server = new McpServer({
   name: 'what-next',
-  version: '2.3.2',
+  version: '2.4.0',
 });
 
 // ─── Tool timeout + error logging helpers ─────────────────────────────────────

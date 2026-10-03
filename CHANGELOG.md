@@ -7,6 +7,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-03
+
+Fixes from a full QA sweep of every surface: npm package, local API, MCP server, cloud, sync,
+VS Code extension and the website.
+
+### Added
+- **Edits and deletes sync across machines.** Editing a session (MCP `edit_session` or the REST API)
+  pushes the change to the cloud, and edits and deletes made elsewhere are pulled down. The cloud
+  gains an `updated_at` column and a tombstone table (additive migration on boot).
+- Context cards refresh after a session edit.
+
+### Fixed
+- **Copilot CLI instructions are no longer overwritten.** What Next used to replace
+  `~/.copilot/copilot-instructions.md` with its author's personal instructions. It now keeps a
+  generic, marker-delimited block and leaves your own text alone, backs up the old generated file once,
+  and only writes when `~/.copilot` already exists.
+- **Sync never stalls on one bad row.** An oversized or rejected session is marked and skipped instead
+  of blocking every later push; fields are trimmed to the cloud limits first. A 429 or 401 pauses sync
+  and retries later instead of skipping rows. Pushed sessions keep their original date. The gist
+  fallback no longer retries a rejected gist forever.
+- The cloud returns a real 413 for oversized requests instead of dropping the connection, which the
+  client mistook for an outage.
+- `wn secret`: values containing `$` are saved correctly (they used to corrupt `.env`), `export`
+  prefixes are kept, an absolute `--env-file` works, multi-line pastes are refused instead of being cut
+  to the first line, the default wait is 110s to fit agent tool timeouts, and macOS Keychain values
+  under 128 bytes no longer appear in the process list.
+- `wn guard install` keeps your other hooks. The guard catches more accidental leaks (see README) and
+  no longer blocks harmless commands like `node --env-file=.env` or `.gitignore` edits.
+- Time search: words like "decisions", "marketing" and "junit" no longer read as months; "last May"
+  works.
+- The git watcher processes the oldest commits first after a large pull and no longer blocks the API.
+- Cursor rules files and AGENTS.md hold a short pointer to the context card (no card content, no
+  absolute paths) and are only rewritten when they change, so your working tree stays clean.
+- ChatGPT bookmarklet works on long chats, keeps multi-line fields and follows a custom port. ChatGPT
+  import keeps conversation dates, skips conversations already imported, keeps non-Latin titles and
+  indexes in the background.
+- `/orientation` shows sessions and open tasks for projects that were not active recently.
+- The MCP server starts even when the embedding model's native binary fails to load.
+- Search no longer errors on control characters; mixed date formats sort correctly.
+- VS Code panel: shows when the local API is offline, uses the right card file, reads dates as UTC,
+  and only prompts on close when a folder is closed.
+- The update notice gives npm users the npm command instead of `git pull`.
+- Installer: the LaunchAgent plist (which holds your API key) is owner-only, a failed `launchctl load`
+  exits non-zero, and Linux setup no longer prints your key. `start-api.sh` no longer switches branch
+  or discards local edits when self-healing a git checkout.
+
+### Security
+- The local API refuses writes from pages on other localhost ports (for example another dev server).
+- Cloud rate limiting is keyed on the real client IP; HSTS on all cloud responses; the signup webhook
+  secret is accepted by header only and the signup function validates its payload.
+- Context cards: stored text can no longer create fake card sections.
+- VS Code panel has a Content Security Policy.
+- Website: Content-Security-Policy and HSTS headers, a real 404 page, accessible contrast.
+
+### Changed
+- **Node.js 22 or newer is required.** Node 20 reached end of life and has no prebuilt SQLite binary,
+  so installs failed on Windows. CI now tests Node 22 and 26 on Linux, macOS and Windows.
+
 ## [2.3.2] - 2026-10-03
 
 ### Fixed

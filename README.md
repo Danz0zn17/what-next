@@ -51,7 +51,7 @@ dump_session              SQLite source of truth          backup only
 ## Prerequisites
 
 - **macOS, Windows, or Linux**
-- **Node.js 20+** - install via [nodejs.org](https://nodejs.org)
+- **Node.js 22+** - install via [nodejs.org](https://nodejs.org)
 - At least one AI surface: Claude Code, Claude Desktop, VS Code with Copilot, Cursor, etc.
 
 ---
@@ -318,6 +318,8 @@ Targets: `env` (`.env` in the current folder, or `--env-file`), `netlify`, `rail
 platform's own CLI, so it must be installed and linked to the project. Check presence without
 revealing anything with `wn secret STRIPE_SECRET_KEY --check`. A new terminal window opens on macOS
 and most Linux desktops; elsewhere the agent gives you a command to run in your own terminal.
+The agent waits up to 110 seconds by default (`--timeout` changes it). Values are single-line;
+multi-line keys such as PEM files are refused rather than cut short, so keep those in a file.
 
 **Block commands that print secrets (Claude Code).**
 
@@ -325,12 +327,15 @@ and most Linux desktops; elsewhere the agent gives you a command to run in your 
 wn guard install
 ```
 
-Adds a hook to `~/.claude/settings.json` (backed up first) that stops Claude Code from reading `.env`
-files and private keys, reading AI tool configs that hold API keys (`mcp.json`,
-`claude_desktop_config.json`, `~/.codex/config.toml`), dumping the environment, echoing `$..._KEY`
-variables, or listing platform env vars with values. The block message tells Claude to use `wn secret`
-instead. `.env.example`, presence checks like `[ -n "$KEY" ]`, and commands that only mention these
-in a commit message or quoted text still work. It is a guardrail against accidents, not a sandbox.
+Adds a hook to `~/.claude/settings.json` (backed up first, your other hooks kept) that stops Claude
+Code from reading `.env`, `.envrc` and `.dev.vars` files, private keys and credential files
+(`~/.aws/credentials`, `~/.netrc`, `~/.pgpass`, `~/.npmrc` with a token), AI tool configs that hold
+API keys (`mcp.json`, `claude_desktop_config.json`, `~/.codex/config.toml`), dumping the environment
+(including from `node -e` or python), echoing secret variables like `$..._KEY` or `$DATABASE_URL`, or
+listing platform env vars with values. The block message tells Claude to use `wn secret` instead.
+`.env.example`, presence checks like `[ -n "$KEY" ]`, `--env-file .env` flags, `.gitignore` edits and
+commands that only mention these in a commit message or quoted text still work. It is a guardrail
+against accidents, not a sandbox.
 
 Tip: add this line to your `CLAUDE.md` so the agent never asks you to paste a key:
 `Never ask me to paste a secret into chat - run wn secret NAME --to <targets> --url <where to get it>.`
