@@ -69,6 +69,7 @@ test('guard blocks commands that print secrets', () => {
     'netlify env:list', 'netlify env:get STRIPE_KEY',
     'echo $STRIPE_SECRET_KEY', 'echo "${OPENAI_API_KEY}"', 'printf %s $DB_PASSWORD',
     'security find-generic-password -s x -w',
+    'plutil -p ~/Library/LaunchAgents/com.x.plist', 'cat ~/Library/LaunchAgents/com.x.plist', 'launchctl print gui/501/com.x',
   ]) assert.ok(bash(cmd), `should block: ${cmd}`);
 });
 
@@ -79,7 +80,7 @@ test('guard allows normal work and safe secret handling', () => {
     '[ -n "$STRIPE_KEY" ] && echo SET || echo MISSING',
     'railway variables --set FOO=bar', 'railway variable set FOO --stdin', 'netlify env:set FOO bar',
     'wn secret STRIPE_KEY --to env,netlify', 'wn secret STRIPE_KEY --check --env-file .env.local',
-    'grep -r environment src/',
+    'grep -r environment src/', 'launchctl print gui/501/com.x | grep state', 'plutil -lint a.plist',
   ]) assert.equal(bash(cmd), null, `should allow: ${cmd}`);
 });
 

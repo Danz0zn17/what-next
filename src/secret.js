@@ -279,6 +279,8 @@ const BASH_RULES = [
   [/\bgcloud\s+secrets\s+versions\s+access\b/, 'prints a cloud secret'],
   [/\baws\s+secretsmanager\s+get-secret-value\b/, 'prints a cloud secret'],
   [/\bop\s+(read|item\s+get)\b/, 'prints a 1Password secret'],
+  [/\bplutil\s+(-p|-convert\s+\S+\s+-o\s+-)(\s|$)|\b(cat|less|more|head|tail|bat)\b[^;&|]*\.plist\b/, 'prints a plist, which can hold service API keys'],
+  [/\blaunchctl\s+print\b(?![^;&]*\|)/, 'prints a service environment, which can hold API keys'],
   [/\b(echo|printf)\b[^;&|]*\$\{?[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|DSN)/, 'prints a secret variable'],
 ];
 

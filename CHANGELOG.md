@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-10-03
+
+### Security
+- `wn guard` also blocks dumping LaunchAgent plists (`plutil -p`, `cat *.plist`) and unfiltered
+  `launchctl print`, which show the What Next API key and other service secrets.
+
 ## [2.3.0] - 2026-10-03
 
 ### Added
