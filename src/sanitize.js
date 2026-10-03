@@ -171,6 +171,19 @@ export function sanitizeFields(record, fields) {
   return { values, flags: [...flags] };
 }
 
+// Project names become card filenames: no path separators, no "..". The MCP
+// zod schema and the REST API both validate against these.
+export const PROJECT_NAME_MAX = 100;
+export const PROJECT_NAME_RE = /^(?!.*\.\.)[^/\\]+$/;
+
+/** Returns why a project name is unusable, or null when it is fine. */
+export function projectNameError(value) {
+  if (typeof value !== 'string') return 'project must be a string';
+  if (value.length < 1 || value.length > PROJECT_NAME_MAX) return `project must be 1-${PROJECT_NAME_MAX} characters`;
+  if (!PROJECT_NAME_RE.test(value)) return 'project must not contain path separators or ".."';
+  return null;
+}
+
 /** Flag list to the stored column value: a sorted CSV, or null when clean. */
 export function flagsToColumn(flags) {
   if (!flags || flags.length === 0) return null;

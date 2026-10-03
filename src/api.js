@@ -25,11 +25,15 @@
 import { createServer } from 'http';
 import { parseTimeRange } from './timeparse.js';
 import { setSessionCloudId, setFactCloudId } from './db.js';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun, getFlaggedMemories } from './db.js';
+import db from './db.js';
+import { createHash } from 'crypto';
+import { projectNameError } from './sanitize.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, getSyncStatus, upsertProjectIntelligence, getProjectIntelligence, addCommitContext, getRecentCommits, getLastCurationRun, getFlaggedMemories } from './db.js';
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { runCuration } from './curator.js';
 import { indexSession, indexFact } from './indexer.js';
+import { toSessionDate } from './import-chatgpt.js';
 
 // Embeddings require native onnxruntime binaries and can be slow/dataless on
 // macOS boot. Load them only when semantic search is actually requested so the
@@ -172,6 +176,7 @@ const HTML_FORM = `<!DOCTYPE html>
       document.getElementById('tab-' + name).classList.add('active');
       if (name === 'projects') loadProjects();
     }
+    if (location.hash === '#projects') showTab('projects');
 
     function esc(v) {
       return String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
@@ -252,15 +257,28 @@ const HTML_FORM = `<!DOCTYPE html>
 </html>`;
 
 // ─── ChatGPT dump parser ──────────────────────────────────────────────────────
-// Looks for a ---WHAT NEXT DUMP--- block that ChatGPT is instructed to produce
+// Looks for a ---WHAT NEXT DUMP--- block that ChatGPT is instructed to produce.
+// A chat can hold several (one per milestone, or the instructions pasted in):
+// the LAST one is the current state. Keys count only at the start of a line,
+// and a value runs, over as many lines as it takes, up to the next key line.
+const DUMP_KEYS = ['PROJECT', 'SUMMARY', 'BUILT', 'DECISIONS', 'STACK', 'NEXT', 'TAGS'];
+const DUMP_FIELD = Object.fromEntries(DUMP_KEYS.map(key => [key, new RegExp(
+  `^[ \\t]*${key}:[ \\t]*([\\s\\S]*?)(?=^[ \\t]*(?:${DUMP_KEYS.join('|')}):|(?![\\s\\S]))`, 'im')]));
+
+function lastDumpBlock(raw) {
+  const start = /---WHAT NEXT DUMP---/gi;
+  let from = -1;
+  for (let m; (m = start.exec(raw));) from = m.index + m[0].length;
+  if (from < 0) return null;
+  const rest = raw.slice(from);
+  const end = rest.search(/---END DUMP---/i);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
 function parseAgentDump(raw) {
-  const match = raw.match(/---WHAT NEXT DUMP---([\s\S]*?)(?:---END DUMP---|$)/i);
-  if (!match) return null;
-  const block = match[1];
-  const get = (key) => {
-    const m = block.match(new RegExp(`${key}:\\s*(.+?)(?=\\n[A-Z]|$)`, 'is'));
-    return m ? m[1].trim() : undefined;
-  };
+  const block = typeof raw === 'string' ? lastDumpBlock(raw) : null;
+  if (block === null) return null;
+  const get = (key) => block.match(DUMP_FIELD[key])?.[1].trim() || undefined;
   const project = get('PROJECT');
   const summary = get('SUMMARY');
   if (!project || !summary) return null;
@@ -276,6 +294,7 @@ function parseAgentDump(raw) {
 }
 
 // ─── Setup page ───────────────────────────────────────────────────────────────
+// Sends only the last dump block, not the whole chat, so long chats stay small.
 const BOOKMARKLET = `javascript:(function(){
   var msgs=document.querySelectorAll('[data-message-author-role]');
   var text='';
@@ -285,7 +304,12 @@ const BOOKMARKLET = `javascript:(function(){
     text+=(role==='user'?'USER: ':'AI: ')+content+'\\n\\n';
   });
   if(!text){alert('No ChatGPT messages found on this page.');return;}
-  fetch('http://localhost:3747/ingest',{
+  var start=text.lastIndexOf('---WHAT NEXT DUMP---');
+  if(start<0){alert('No WHAT NEXT DUMP block found. Ask ChatGPT to produce the summary first.');return;}
+  text=text.slice(start);
+  var end=text.indexOf('---END DUMP---');
+  if(end>=0){text=text.slice(0,end+14);}
+  fetch('http://localhost:${PORT}/ingest',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({raw:text})
@@ -419,7 +443,8 @@ const IMPORT_PAGE = `<!DOCTYPE html>
     <div class="stat"><span>From WHAT NEXT DUMP blocks</span><span id="r-dump"></span></div>
     <div class="stat"><span>Auto-summarised</span><span id="r-auto"></span></div>
     <div class="stat"><span>Skipped (too short / trivial)</span><span id="r-skipped"></span></div>
-    <p style="margin-top:1rem"><a href="/projects">Browse your projects →</a></p>
+    <div class="stat"><span>Already imported</span><span id="r-dupes"></span></div>
+    <p style="margin-top:1rem"><a href="/#projects">Browse your projects →</a></p>
   </div>
 
   <p style="margin-top:2rem"><a href="/">← Back to What Next</a></p>
@@ -459,6 +484,7 @@ const IMPORT_PAGE = `<!DOCTYPE html>
         document.getElementById('r-dump').textContent = data.fromDump;
         document.getElementById('r-auto').textContent = data.imported - data.fromDump;
         document.getElementById('r-skipped').textContent = data.skipped;
+        document.getElementById('r-dupes').textContent = data.duplicates ?? 0;
         document.getElementById('result').style.display = 'block';
       } catch(e) {
         const err = document.getElementById('error');
@@ -490,6 +516,7 @@ function sendHtml(res, html) {
 }
 
 const MAX_BODY_BYTES = 64 * 1024; // 64KB
+const MAX_INGEST_BYTES = 1024 * 1024; // 1MB, a dump block plus headroom for older bookmarklets
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024; // 50MB, a large ChatGPT export
 
 // Reads the body up to maxBytes. Beyond that it stops reading and rejects with
@@ -513,8 +540,8 @@ function readBody(req, maxBytes) {
   });
 }
 
-async function parseBody(req) {
-  const raw = await readBody(req, MAX_BODY_BYTES);
+async function parseBody(req, maxBytes = MAX_BODY_BYTES) {
+  const raw = await readBody(req, maxBytes);
   try { return JSON.parse(raw || '{}'); } catch { throw Object.assign(new Error('Invalid JSON'), { statusCode: 400 }); }
 }
 
@@ -528,8 +555,25 @@ function clampLimit(value, fallback, max) {
   return Math.min(n, max);
 }
 
+// Path segments arrive percent-encoded; a malformed one is the caller's error.
+function decodeParam(value) {
+  try { return decodeURIComponent(value); } catch { throw Object.assign(new Error('Malformed URL encoding'), { statusCode: 400 }); }
+}
+
+// Same rule as the MCP zod schema: names become card filenames.
+function checkProject(value, { optional = false } = {}) {
+  if (optional && (value === undefined || value === null || value === '')) return null;
+  return projectNameError(value);
+}
+
+function checkText(body, fields) {
+  for (const f of fields) {
+    if (body[f] !== undefined && body[f] !== null && typeof body[f] !== 'string') return `${f} must be a string`;
+  }
+  return null;
+}
+
 // Request guard (DNS rebinding + CSRF)
-const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 // The ChatGPT bookmarklet (SETUP_PAGE) posts to /ingest from these origins.
 const INGEST_ORIGINS = new Set(['https://chatgpt.com', 'https://chat.openai.com']);
 
@@ -539,8 +583,16 @@ function allowedHosts() {
   return new Set(hosts);
 }
 
+// Only this API's own UI may write cross-origin: another dev server on
+// localhost (any other port) is a different origin and gets no access.
+function localOrigins() {
+  const origins = [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`, `http://[::1]:${PORT}`];
+  if (String(PORT) === '80') origins.push('http://localhost', 'http://127.0.0.1', 'http://[::1]');
+  return new Set(origins);
+}
+
 function originAllowed(origin, pathname) {
-  if (LOCAL_ORIGIN.test(origin)) return true;
+  if (localOrigins().has(String(origin).toLowerCase())) return true;
   return pathname === '/ingest' && INGEST_ORIGINS.has(origin);
 }
 
@@ -560,21 +612,18 @@ function extractMessages(mapping) {
 
 function findDumpBlock(messages) {
   for (const m of [...messages].reverse()) {
-    const match = m.text.match(/---WHAT NEXT DUMP---([\s\S]*?)(?:---END DUMP---|$)/i);
-    if (!match) continue;
-    const block = match[1];
-    const get = (key) => {
-      const r = block.match(new RegExp(`${key}:\\s*(.+?)(?=\\n[A-Z]|$)`, 'is'));
-      return r ? r[1].trim() : undefined;
-    };
-    const project = get('PROJECT'), summary = get('SUMMARY');
-    if (project && summary) return { project, summary, what_was_built: get('BUILT'), decisions: get('DECISIONS'), stack: get('STACK'), next_steps: get('NEXT'), tags: get('TAGS') };
+    const dump = parseAgentDump(m.text);
+    if (dump) return dump;
   }
   return null;
 }
 
+// Unicode-aware: letters, marks and digits in any script survive, so a
+// Japanese or Cyrillic title keeps its own project instead of "".
 function titleToProject(title) {
-  return (title ?? 'unknown').toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 50);
+  const slug = String(title ?? '').normalize('NFKC').toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-').replace(/-+/g, '-');
+  return [...slug].slice(0, 50).join('').replace(/^-+|-+$/g, '') || 'chatgpt-import';
 }
 
 function buildStack(messages) {
@@ -587,24 +636,115 @@ function isWorthImporting(messages) {
   return messages.filter(m => m.role === 'assistant').map(m => m.text).join(' ').split(/\s+/).length > 100;
 }
 
-function importConversations(conversations) {
-  let imported = 0, skipped = 0, fromDump = 0;
-  for (const convo of conversations) {
-    const title = convo.title ?? 'Untitled';
+// Each imported session carries a chatgpt:<id> tag (the export's conversation
+// id, or a hash of title + create_time), the same tag the import-chatgpt CLI
+// writes, so a re-import by either path skips what is already there.
+// Auto-summaries from before the tag existed match on their summary.
+const IMPORT_ID_TAG = 'chatgpt:';
+
+function conversationKey(convo) {
+  const id = convo.conversation_id ?? convo.id;
+  if (typeof id === 'string' && /^[\w-]{1,100}$/.test(id)) return id;
+  return createHash('sha256').update(`${convo.title ?? ''}\u0000${convo.create_time ?? ''}`).digest('hex').slice(0, 24);
+}
+
+function existingImports() {
+  const keys = new Set();
+  const summaries = new Set();
+  for (const { tags } of db.prepare(`SELECT tags FROM sessions WHERE tags LIKE '%${IMPORT_ID_TAG}%'`).all()) {
+    for (const t of String(tags).split(',')) {
+      const tag = t.trim();
+      if (tag.startsWith(IMPORT_ID_TAG)) keys.add(tag.slice(IMPORT_ID_TAG.length));
+    }
+  }
+  for (const { summary } of db.prepare(`SELECT summary FROM sessions WHERE summary LIKE '[Imported from ChatGPT]%'`).all()) summaries.add(summary);
+  return { keys, summaries };
+}
+
+// Embedding thousands of sessions at once would pin the CPU and memory, so
+// imported rows are indexed in the background, a few at a time.
+const INDEX_CONCURRENCY = 2;
+const indexQueue = [];
+let indexWorkers = 0;
+
+function queueIndex(id, fields) {
+  indexQueue.push([id, fields]);
+  if (indexWorkers >= INDEX_CONCURRENCY) return;
+  indexWorkers++;
+  (async () => {
+    try {
+      while (indexQueue.length) {
+        const [qid, qfields] = indexQueue.shift();
+        await indexSession(qid, qfields);
+      }
+    } finally {
+      indexWorkers--;
+    }
+  })();
+}
+
+async function importConversations(conversations) {
+  let imported = 0, skipped = 0, fromDump = 0, duplicates = 0;
+  const seen = existingImports();
+  const touched = new Set();
+  for (let i = 0; i < conversations.length; i++) {
+    // Yield now and then so a large export does not stall other requests.
+    if (i > 0 && i % 50 === 0) await new Promise(r => setImmediate(r));
+    const convo = conversations[i];
+    if (!convo || typeof convo !== 'object') { skipped++; continue; }
+    const title = typeof convo.title === 'string' && convo.title.trim() ? convo.title : 'Untitled';
+    const key = conversationKey(convo);
+    if (seen.keys.has(key)) { duplicates++; continue; }
     const messages = extractMessages(convo.mapping);
-    const date = convo.create_time ? new Date(convo.create_time * 1000).toISOString().slice(0, 10) : 'unknown';
+    const created = Number(convo.create_time);
+    const date = created > 0 ? new Date(created * 1000).toISOString().slice(0, 10) : 'unknown';
     if (!isWorthImporting(messages)) { skipped++; continue; }
+    const idTag = `${IMPORT_ID_TAG}${key}`;
+    let fields;
     const dump = findDumpBlock(messages);
-    if (dump) { indexSession(addSession(dump), dump); fromDump++; imported++; continue; }
-    const project = titleToProject(title);
-    const firstUser = messages.find(m => m.role === 'user')?.text ?? '';
-    const summary = `[Imported from ChatGPT] "${title}". Started with: ${firstUser.slice(0, 300).replace(/\n+/g, ' ').trim()}`;
-    const fields = { project, summary, stack: buildStack(messages), tags: `chatgpt-import,${date.slice(0, 7)}` };
-    indexSession(addSession(fields), fields);
+    if (dump) {
+      if (checkProject(dump.project)) dump.project = titleToProject(title);
+      fields = { ...dump, tags: [dump.tags, idTag].filter(Boolean).join(',') };
+    } else {
+      const firstUser = messages.find(m => m.role === 'user')?.text ?? '';
+      const summary = `[Imported from ChatGPT] "${title}". Started with: ${firstUser.slice(0, 300).replace(/\n+/g, ' ').trim()}`;
+      if (seen.summaries.has(summary)) { duplicates++; continue; }
+      seen.summaries.add(summary);
+      fields = { project: titleToProject(title), summary, stack: buildStack(messages), tags: `chatgpt-import,${date.slice(0, 7)},${idTag}` };
+    }
+    seen.keys.add(key);
+    const rowId = addSession(fields);
+    const sessionDate = toSessionDate(convo.create_time);
+    if (sessionDate) db.prepare('UPDATE sessions SET session_date = ? WHERE id = ?').run(sessionDate, rowId);
+    queueIndex(rowId, fields);
+    touched.add(fields.project);
+    if (dump) fromDump++;
     imported++;
   }
-  return { total: conversations.length, imported, skipped, fromDump };
+  if (imported > 0) {
+    setImmediate(() => {
+      for (const project of touched) { try { writeSidecarForProject(project); } catch {} }
+      try { writeGlobalContext(); } catch {}
+    });
+  }
+  return { total: conversations.length, imported, skipped, duplicates, fromDump };
 }
+
+let curationRunning = false;
+const CURATE_BUDGET_MS = 120_000;
+
+// Newest non-empty next_steps for one project, however old (getWhatsNext only
+// covers the most recent projects).
+function latestNextSteps(project) {
+  return db.prepare(`
+    SELECT s.next_steps FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE p.name = ? AND s.next_steps IS NOT NULL AND trim(s.next_steps) != ''
+    ORDER BY s.session_date DESC, s.id DESC LIMIT 1
+  `).get(project)?.next_steps ?? null;
+}
+
+// Exported for tests.
+export { parseAgentDump, titleToProject };
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 export function startApiServer() {
@@ -658,6 +798,8 @@ export function startApiServer() {
       if (method === 'POST' && url.pathname === '/session') {
         const body = await parseBody(req);
         if (!body.project || !body.summary) return send(res, 400, { error: 'project and summary are required' });
+        const bad = checkProject(body.project) ?? checkText(body, ['summary', 'what_was_built', 'decisions', 'stack', 'next_steps', 'tags']);
+        if (bad) return send(res, 400, { error: bad });
         const id = addSession(body);
         indexSession(id, body);
         if (cloud.isEnabled()) cloud.postSession(body).then(r => { if (r?.id) setSessionCloudId(id, r.id); }).catch(() => {});
@@ -673,10 +815,19 @@ export function startApiServer() {
       if (patchSessionMatch) {
         const id = parseInt(patchSessionMatch[1], 10);
         const body = await parseBody(req);
+        const bad = checkText(body, ['summary', 'what_was_built', 'decisions', 'stack', 'next_steps', 'tags']);
+        if (bad) return send(res, 400, { error: bad });
         const changed = editSession(id, body);
         if (!changed) return send(res, 404, { error: 'Session not found or nothing to update' });
         const updated = getSessionById(id);
-        if (updated) indexSession(id, updated);
+        if (updated) {
+          indexSession(id, updated);
+          // The card and global brief replay this session; refresh them.
+          setImmediate(() => {
+            try { writeSidecarForProject(updated.project_name); } catch {}
+            try { writeGlobalContext(); } catch {}
+          });
+        }
         return send(res, 200, { ok: true });
       }
 
@@ -684,6 +835,8 @@ export function startApiServer() {
       if (method === 'POST' && url.pathname === '/fact') {
         const body = await parseBody(req);
         if (!body.category || !body.content) return send(res, 400, { error: 'category and content are required' });
+        const bad = checkProject(body.project, { optional: true }) ?? checkText(body, ['category', 'content', 'tags']);
+        if (bad) return send(res, 400, { error: bad });
         const id = addFact(body);
         indexFact(id, body);
         // Write-through to cloud (fire and forget), recording the cloud id on success
@@ -762,8 +915,17 @@ export function startApiServer() {
       // POST /curate — run the memory curator (body: { dry_run?: boolean })
       if (method === 'POST' && url.pathname === '/curate') {
         const body = await parseBody(req);
-        const report = await runCuration({ apply: body.dry_run !== true });
-        return send(res, 200, report);
+        if (curationRunning) return send(res, 409, { error: 'A curation run is already in progress' });
+        curationRunning = true;
+        // Stop between items if the caller goes away; the budget bounds the run.
+        const controller = new AbortController();
+        res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+        try {
+          const report = await runCuration({ apply: body.dry_run !== true, signal: controller.signal, budgetMs: CURATE_BUDGET_MS });
+          return send(res, 200, report);
+        } finally {
+          curationRunning = false;
+        }
       }
 
       // GET /curate/status — last curation run summary
@@ -775,7 +937,7 @@ export function startApiServer() {
       // GET /flagged - stored memory whose text tripped the injection check.
       // Nothing here is hidden from search or the cards; this is the review list.
       if (method === 'GET' && url.pathname === '/flagged') {
-        const limit = Number(url.searchParams.get('limit')) || 50;
+        const limit = clampLimit(url.searchParams.get('limit'), 50, 200);
         const flagged = getFlaggedMemories(limit);
         return send(res, 200, {
           counts: { sessions: flagged.sessions.length, facts: flagged.facts.length },
@@ -809,12 +971,18 @@ export function startApiServer() {
 
       // POST /ingest — accepts a raw WHAT NEXT DUMP block from ChatGPT bookmarklet
       if (method === 'POST' && url.pathname === '/ingest') {
-        const body = await parseBody(req);
-        if (!body.raw) return send(res, 400, { error: 'raw field required' });
+        const body = await parseBody(req, MAX_INGEST_BYTES);
+        if (!body.raw || typeof body.raw !== 'string') return send(res, 400, { error: 'raw field required' });
         const parsed = parseAgentDump(body.raw);
         if (!parsed) return send(res, 400, { error: 'Could not find a WHAT NEXT DUMP block in the text' });
+        const bad = checkProject(parsed.project);
+        if (bad) return send(res, 400, { error: bad });
         const id = addSession(parsed);
         indexSession(id, parsed);
+        setImmediate(() => {
+          try { writeSidecarForProject(parsed.project); } catch {}
+          try { writeGlobalContext(); } catch {}
+        });
         return send(res, 201, { id, message: 'Session ingested', project: parsed.project });
       }
 
@@ -834,7 +1002,7 @@ export function startApiServer() {
         let conversations;
         try { conversations = JSON.parse(raw); } catch { return send(res, 400, { error: 'Invalid JSON — make sure you upload conversations.json exactly as exported' }); }
         if (!Array.isArray(conversations)) return send(res, 400, { error: 'Expected an array of conversations' });
-        const result = importConversations(conversations);
+        const result = await importConversations(conversations);
         return send(res, 200, result);
       }
 
@@ -856,7 +1024,7 @@ export function startApiServer() {
       // GET /project/:name
       const projectMatch = url.pathname.match(/^\/project\/(.+)$/);
       if (method === 'GET' && projectMatch) {
-        const name = decodeURIComponent(projectMatch[1]);
+        const name = decodeParam(projectMatch[1]);
         const project = getProject(name);
         if (!project) return send(res, 404, { error: 'Project not found' });
         return send(res, 200, project);
@@ -866,6 +1034,8 @@ export function startApiServer() {
       if (method === 'POST' && url.pathname === '/intelligence') {
         const body = await parseBody(req);
         if (!body.project) return send(res, 400, { error: 'project is required' });
+        const bad = checkProject(body.project) ?? checkText(body, ['repo_path', 'stack', 'key_dirs', 'conventions', 'env_vars', 'deployment', 'extra']);
+        if (bad) return send(res, 400, { error: bad });
         upsertProjectIntelligence(body);
         if (cloud.isEnabled()) cloud.postIntelligence(body).catch(() => {});
         setImmediate(() => {
@@ -878,7 +1048,7 @@ export function startApiServer() {
       // GET /intelligence/:project — get project intelligence card
       const intelMatch = url.pathname.match(/^\/intelligence\/(.+)$/);
       if (method === 'GET' && intelMatch) {
-        const name = decodeURIComponent(intelMatch[1]);
+        const name = decodeParam(intelMatch[1]);
         const intel = getProjectIntelligence(name);
         if (!intel) return send(res, 404, { error: 'No intelligence saved for this project' });
         return send(res, 200, intel);
@@ -887,12 +1057,11 @@ export function startApiServer() {
       // GET /orientation/:project — structured orientation brief (under 2000 tokens)
       const orientMatch = url.pathname.match(/^\/orientation\/(.+)$/);
       if (method === 'GET' && orientMatch) {
-        const name = decodeURIComponent(orientMatch[1]);
+        const name = decodeParam(orientMatch[1]);
         const intel = getProjectIntelligence(name);
-        const sessions = getRecentSessions(20).filter(s => s.project_name === name).slice(0, 3);
-        const whatsNext = getWhatsNext(20).find(i => i.project_name === name);
+        const sessions = getRecentSessionsForProject(name, 3);
         const commits = getRecentCommits(name, 5);
-        return send(res, 200, { project: name, intelligence: intel, recent_sessions: sessions, next_steps: whatsNext?.next_steps ?? null, recent_commits: commits });
+        return send(res, 200, { project: name, intelligence: intel, recent_sessions: sessions, next_steps: latestNextSteps(name), recent_commits: commits });
       }
 
       // POST /commit-context — receive git commit events from watcher
@@ -901,6 +1070,8 @@ export function startApiServer() {
         if (!body.project || !body.commit_hash || !body.message) {
           return send(res, 400, { error: 'project, commit_hash, and message are required' });
         }
+        const badProject = checkProject(body.project);
+        if (badProject) return send(res, 400, { error: badProject });
         addCommitContext(body);
         setImmediate(() => {
           try { writeSidecarForProject(body.project); } catch {}

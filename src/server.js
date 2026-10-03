@@ -4,17 +4,42 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { sanitizeFields, neutralize, DATA_NOTICE, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS } from './sanitize.js';
+import { sanitizeFields, neutralize, DATA_NOTICE, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, PROJECT_NAME_MAX, PROJECT_NAME_RE } from './sanitize.js';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
+import db from './db.js';
 import { parseTimeRange, inRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
-import { generateEmbedding, cosineSimilarity, warmEmbedder } from './embeddings.js';
 import { indexSession, indexFact } from './indexer.js';
 import { runCuration } from './curator.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
 import { syncPending, dumpToGist } from './gist-client.js';
 import { buildUpdateNotice } from './update-check.js';
+
+// Embeddings need the native onnxruntime binding. Load them on first use so a
+// broken or slow native load only affects semantic search, not every tool, and
+// MCP startup stays cheap.
+let embeddingsPromise = null;
+function loadEmbeddings() {
+  if (!embeddingsPromise) embeddingsPromise = import('./embeddings.js');
+  return embeddingsPromise;
+}
+async function embeddings() {
+  try {
+    return await loadEmbeddings();
+  } catch (err) {
+    throw new Error(`semantic search unavailable, native embeddings did not load: ${err.message}`);
+  }
+}
+
+// Newest non-empty next_steps for one project, however old.
+function latestNextSteps(project) {
+  return db.prepare(`
+    SELECT s.next_steps FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE p.name = ? AND s.next_steps IS NOT NULL AND trim(s.next_steps) != ''
+    ORDER BY s.session_date DESC, s.id DESC LIMIT 1
+  `).get(project)?.next_steps ?? null;
+}
 
 const server = new McpServer({
   name: 'what-next',
@@ -136,7 +161,8 @@ function withTimeout(toolName, handlerFn) {
 }
 
 // Project names become card filenames: no path separators, no "..".
-const projectName = z.string().min(1).max(100).regex(/^(?!.*\.\.)[^/\\]+$/, 'no path separators or ".."');
+const projectName = z.string().min(1).max(PROJECT_NAME_MAX).regex(PROJECT_NAME_RE, 'no path separators or ".."');
+const resultLimit = (fallback, max) => z.number().int().min(1).max(max).optional().default(fallback);
 
 // Everything the read tools return is recalled memory, some of it from the
 // cloud, so it is escaped the same way the cards are and labelled as data.
@@ -364,7 +390,7 @@ server.tool(
   withTimeout('get_orientation', async ({ project }) => {
     const intel = getProjectIntelligence(project);
     const sessions = getRecentSessionsForProject(project, 3);
-    const whatsNext = getWhatsNext(20).find(i => i.project_name === project);
+    const nextSteps = latestNextSteps(project);
     const globalFacts = getAllFacts().filter(f => !f.project_id).slice(0, 8);
 
     const lines = [`# ${project} — Orientation Brief\n`];
@@ -393,9 +419,9 @@ server.tool(
       }
     }
 
-    if (whatsNext?.next_steps) {
+    if (nextSteps) {
       lines.push('## Open Tasks');
-      lines.push(whatsNext.next_steps);
+      lines.push(nextSteps);
       lines.push('');
     }
 
@@ -414,7 +440,7 @@ server.tool(
   "Keyword search over sessions and facts. Understands time phrases (\"auth decisions in August\", \"surf-rides last week\", \"since 2026-07-01\"): the window is applied first, text ranked inside it.",
   {
     query: z.string().describe('Search query — can be a technology, concept, project name, or anything you remember working on'),
-    limit: z.number().optional().default(5).describe('Max results to return'),
+    limit: resultLimit(5, 50).describe('Max results to return (1-50)'),
   },
   withTimeout('search_memories', async ({ query, limit }) => {
     let results;
@@ -599,6 +625,7 @@ async function localSemantic(query, limit) {
   if (allEmbeddings.length === 0) {
     return { message: 'No embeddings stored yet. Memories will be indexed as you add them.' };
   }
+  const { generateEmbedding, cosineSimilarity } = await embeddings();
   const queryEmbedding = await generateEmbedding(query);
   const scored = allEmbeddings
     .map(e => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
@@ -632,7 +659,7 @@ server.tool(
   "Meaning-based search when you lack exact words. With a time phrase, exact matches in that window rank first and embeddings fill the rest.",
   {
     query: z.string().describe('What you\'re looking for — describe it naturally, no need for exact keywords'),
-    limit: z.number().optional().default(5).describe('Max results to return'),
+    limit: resultLimit(5, 50).describe('Max results to return (1-50)'),
   },
   withTimeout('semantic_search', async ({ query, limit }) => {
     // With a time phrase: exact FTS matches inside the window come first,
@@ -657,6 +684,7 @@ server.tool(
       }
       let remaining = limit - exact.sessions.length - exact.facts.length;
       if (remaining > 0 && range.text) {
+        const { generateEmbedding, cosineSimilarity } = await embeddings();
         const queryEmbedding = await generateEmbedding(range.text);
         const ranked = getAllEmbeddings()
           .map(e => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
@@ -727,7 +755,14 @@ server.tool(
     ctx.wrote = `edit to local session ${id}`;
     // Re-index from the row as stored after the edit
     const session = getSessionById(id);
-    if (session) indexSession(id, session);
+    if (session) {
+      indexSession(id, session);
+      // The card and global brief replay this session; refresh them now.
+      setImmediate(() => {
+        try { writeSidecarForProject(session.project_name); } catch {}
+        try { writeGlobalContext(); } catch {}
+      });
+    }
     return { content: [{ type: 'text', text: `Session ${id} updated.` }] };
   })
 );
@@ -737,7 +772,7 @@ server.tool(
   'whats_next',
   "Open next_steps across projects, newest first. The instant to-do list.",
   {
-    limit: z.number().optional().default(8).describe('Max number of projects to include'),
+    limit: resultLimit(8, 50).describe('Max number of projects to include (1-50)'),
   },
   withTimeout('whats_next', async ({ limit }) => {
     const items = getWhatsNext(limit);
@@ -819,7 +854,7 @@ server.tool(
       lines.push(`${report.unindexed_remaining} fact(s) not yet indexed — run curate_memory again to index more.`);
     }
 
-    return { content: [{ type: 'text', text: lines.join('\n') }] };
+    return memoryResult(lines);
   })
 );
 
@@ -875,5 +910,7 @@ await server.connect(transport);
 // so the first semantic_search does not spend its timeout on a cold model load.
 // Opt-in: every client spawns its own MCP process and the model costs ~100MB each.
 if (process.env.WHATNEXT_WARM_EMBEDDER === '1') {
-  setTimeout(() => { warmEmbedder(); }, 5_000).unref();
+  setTimeout(() => {
+    loadEmbeddings().then(m => m.warmEmbedder?.()).catch(err => log('WARN', 'warm_embedder', err.message));
+  }, 5_000).unref();
 }
