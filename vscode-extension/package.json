@@ -66,7 +66,7 @@
         "whatnext.autoPromptOnClose": {
           "type": "boolean",
           "default": false,
-          "description": "Prompt to save a session when closing a workspace (requires manual confirmation)"
+          "description": "Prompt to save a session when a folder is closed out of the workspace (requires manual confirmation)"
         },
         "whatnext.statusBarEnabled": {
           "type": "boolean",

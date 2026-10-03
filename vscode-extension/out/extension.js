@@ -39,14 +39,15 @@ const vscode = __importStar(require("vscode"));
 const api_1 = require("./api");
 const statusBar_1 = require("./statusBar");
 const contextPanel_1 = require("./contextPanel");
+const cardName_1 = require("./cardName");
 function activate(ctx) {
     const provider = new contextPanel_1.ContextCardViewProvider(ctx);
     ctx.subscriptions.push(vscode.window.registerWebviewViewProvider('whatnext.projectView', provider, {
         webviewOptions: { retainContextWhenHidden: true },
     }));
     (0, statusBar_1.createStatusBar)(ctx);
-    ctx.subscriptions.push(vscode.commands.registerCommand('whatnext.saveSession', async () => {
-        const project = (0, contextPanel_1.detectProject)();
+    ctx.subscriptions.push(vscode.commands.registerCommand('whatnext.saveSession', async (projectArg) => {
+        const project = typeof projectArg === 'string' && projectArg ? projectArg : (0, contextPanel_1.detectProject)();
         if (!project) {
             vscode.window.showWarningMessage('What Next: no project folder open.');
             return;
@@ -91,10 +92,8 @@ function activate(ctx) {
         const project = (0, contextPanel_1.detectProject)();
         if (!project)
             return;
-        const { homedir } = await Promise.resolve().then(() => __importStar(require('os')));
-        const path = `${homedir()}/.whatnext/agents/${project}.md`;
         try {
-            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file((0, cardName_1.cardPath)(project)));
             await vscode.window.showTextDocument(doc, { preview: true });
         }
         catch {
@@ -127,18 +126,24 @@ function activate(ctx) {
         const project = (0, contextPanel_1.detectProject)();
         vscode.window.showInformationMessage(`What Next: API ${alive ? 'online' : 'OFFLINE'} | Project: ${project || 'none detected'}`);
     }));
-    // Auto-prompt on window close if enabled
-    ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh()));
-    if (vscode.workspace.getConfiguration('whatnext').get('autoPromptOnClose', false)) {
-        ctx.subscriptions.push(vscode.window.onDidCloseTerminal(async () => {
-            const project = (0, contextPanel_1.detectProject)();
+    // One workspace-folder listener for the whole extension: refresh the panel,
+    // and when a folder is closed out of the workspace offer to save a session
+    // for it if whatnext.autoPromptOnClose is on (read at event time, so the
+    // setting applies without a reload). VS Code gives extensions no hook to
+    // prompt while the whole window is closing.
+    ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async (e) => {
+        provider.refresh();
+        if (!vscode.workspace.getConfiguration('whatnext').get('autoPromptOnClose', false))
+            return;
+        for (const folder of e.removed) {
+            const project = folder.name;
             if (!project)
-                return;
+                continue;
             const choice = await vscode.window.showInformationMessage(`Save session to What Next for "${project}"?`, 'Save', 'Skip');
             if (choice === 'Save')
-                vscode.commands.executeCommand('whatnext.saveSession');
-        }));
-    }
+                await vscode.commands.executeCommand('whatnext.saveSession', project);
+        }
+    }));
 }
 function deactivate() { }
 //# sourceMappingURL=extension.js.map

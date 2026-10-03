@@ -37,31 +37,23 @@ exports.ContextCardViewProvider = void 0;
 exports.getWebviewContent = getWebviewContent;
 exports.detectProject = detectProject;
 const vscode = __importStar(require("vscode"));
+const crypto_1 = require("crypto");
 const api_1 = require("./api");
-function markdownToHtml(md) {
-    return md
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-        .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/`(.+?)`/g, '<code>$1</code>')
-        .replace(/^- (.+)$/gm, '<li>$1</li>')
-        .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/^(?!<[hul])/gm, '')
-        .replace(/\n/g, '<br>');
-}
-function getWebviewContent(project, orientation, card, error) {
+function getWebviewContent(project, orientation, card, error, csp = { nonce: '', cspSource: '' }) {
     const intel = orientation?.intelligence;
     const sessions = orientation?.recent_sessions ?? [];
     const tasks = orientation?.next_steps ?? '';
     const commits = orientation?.recent_commits ?? [];
     function esc(s) {
-        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
+    // SQLite stores "YYYY-MM-DD HH:MM:SS" in UTC with no zone; new Date() would
+    // read that as local time.
     function fmtDate(d) {
-        const date = new Date(d);
+        const raw = String(d ?? '');
+        const date = new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw) ? raw.replace(' ', 'T') + 'Z' : raw);
+        if (Number.isNaN(date.getTime()))
+            return esc(raw);
         const now = new Date();
         const diffMs = now.getTime() - date.getTime();
         const diffDays = Math.floor(diffMs / 86400000);
@@ -95,7 +87,8 @@ function getWebviewContent(project, orientation, card, error) {
     <div class="offline-card">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="var(--red)" stroke-width="1.2"/><path d="M8 5v3.5M8 10.5v.5" stroke="var(--red)" stroke-width="1.3" stroke-linecap="round"/></svg>
       <div>
-        <div class="offline-title">API offline</div>
+        <div class="offline-title">${/fetch failed|ECONNREFUSED|abort|timeout/i.test(error) ? 'API offline' : 'API error'}</div>
+        <div class="offline-detail">${esc(error)}</div>
         <div class="offline-cmd">launchctl start com.whatnextai.api</div>
       </div>
     </div>` : '';
@@ -104,6 +97,7 @@ function getWebviewContent(project, orientation, card, error) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${csp.cspSource} 'unsafe-inline'; img-src ${csp.cspSource} data:; script-src 'nonce-${csp.nonce}';">
 <style>
   :root {
     --accent:   #6366f1;
@@ -226,6 +220,7 @@ function getWebviewContent(project, orientation, card, error) {
     border-radius: var(--r); padding: 10px 12px;
   }
   .offline-title { font-size: 12px; font-weight: 600; color: var(--red); margin-bottom: 3px; }
+  .offline-detail { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; word-break: break-word; }
   .offline-cmd {
     font-family: var(--vscode-editor-font-family);
     font-size: 11px; color: var(--vscode-descriptionForeground);
@@ -326,16 +321,17 @@ ${!stackPills && !taskLines && !sessionRows && !commitRows && !card && !error ? 
 </div>` : ''}
 
 <div class="actions">
-  <button class="btn" onclick="save()">Save session</button>
-  <button class="btn-ghost" onclick="refresh()">Refresh</button>
+  <button class="btn" data-command="save">Save session</button>
+  <button class="btn-ghost" data-command="refresh">Refresh</button>
 </div>
 
 `}
 
-<script>
+<script nonce="${csp.nonce}">
   const vscode = acquireVsCodeApi();
-  function save() { vscode.postMessage({ command: 'save' }); }
-  function refresh() { vscode.postMessage({ command: 'refresh' }); }
+  document.querySelectorAll('[data-command]').forEach(el => {
+    el.addEventListener('click', () => vscode.postMessage({ command: el.getAttribute('data-command') }));
+  });
 </script>
 </body>
 </html>`;
@@ -343,43 +339,60 @@ ${!stackPills && !taskLines && !sessionRows && !commitRows && !card && !error ? 
 class ContextCardViewProvider {
     constructor(_ctx) {
         this._ctx = _ctx;
+        this._viewDisposables = [];
         this._project = '';
     }
+    // VS Code can resolve the view again after it is disposed (moved, hidden
+    // and re-shown); per-view listeners live and die with that view. The
+    // workspace-folder listener is registered once, in extension.ts.
     resolveWebviewView(view) {
+        this._viewDisposables.forEach(d => d.dispose());
+        this._viewDisposables = [];
         this._view = view;
-        view.webview.options = { enableScripts: true };
-        view.webview.onDidReceiveMessage(msg => {
-            if (msg.command === 'save')
+        view.webview.options = { enableScripts: true, localResourceRoots: [] };
+        this._viewDisposables.push(view.webview.onDidReceiveMessage(msg => {
+            if (msg?.command === 'save')
                 vscode.commands.executeCommand('whatnext.saveSession');
-            if (msg.command === 'refresh')
+            if (msg?.command === 'refresh')
                 this.refresh();
-        }, undefined, this._ctx.subscriptions);
+        }), view.onDidDispose(() => {
+            if (this._view === view)
+                this._view = undefined;
+            this._viewDisposables.forEach(d => d.dispose());
+            this._viewDisposables = [];
+        }));
         this.refresh();
-        vscode.workspace.onDidChangeWorkspaceFolders(() => this.refresh(), undefined, this._ctx.subscriptions);
     }
     setProject(name) {
         this._project = name;
         this.refresh();
+    }
+    render(project, orientation, card, error) {
+        if (!this._view)
+            return;
+        const csp = { nonce: (0, crypto_1.randomBytes)(16).toString('base64'), cspSource: this._view.webview.cspSource };
+        this._view.webview.html = getWebviewContent(project, orientation, card, error, csp);
     }
     async refresh() {
         if (!this._view)
             return;
         const project = this._project || detectProject();
         if (!project) {
-            this._view.webview.html = getWebviewContent('', null, null, 'Open a project folder to see context.');
+            this.render('', null, null, 'Open a project folder to see context.');
             return;
         }
-        try {
-            const [orientation, card] = await Promise.all([
-                (0, api_1.getOrientation)(project).catch(() => null),
-                (0, api_1.getContextCard)(project).catch(() => null),
-            ]);
-            this._view.webview.html = getWebviewContent(project, orientation, card, null);
+        // The card is a local file and still worth showing when the API is down;
+        // an API failure is surfaced, not swallowed.
+        const [orientation, card] = await Promise.allSettled([(0, api_1.getOrientation)(project), (0, api_1.getContextCard)(project)]);
+        const cardText = card.status === 'fulfilled' ? card.value : null;
+        if (orientation.status === 'rejected') {
+            const e = orientation.reason;
+            const cause = e?.cause;
+            const msg = e instanceof Error ? `${e.message}${cause instanceof Error ? ` (${cause.message})` : ''}` : String(e);
+            this.render(project, null, cardText, `Cannot reach What Next API: ${msg}`);
+            return;
         }
-        catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            this._view.webview.html = getWebviewContent(project, null, null, `Cannot reach What Next API: ${msg}`);
-        }
+        this.render(project, orientation.value, cardText, null);
     }
 }
 exports.ContextCardViewProvider = ContextCardViewProvider;

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { saveSession, getWhatsNext, isAlive } from './api';
 import { createStatusBar, markSaved } from './statusBar';
 import { ContextCardViewProvider, detectProject } from './contextPanel';
+import { cardPath } from './cardName';
 
 export function activate(ctx: vscode.ExtensionContext): void {
   const provider = new ContextCardViewProvider(ctx);
@@ -15,8 +16,8 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
   ctx.subscriptions.push(
 
-    vscode.commands.registerCommand('whatnext.saveSession', async () => {
-      const project = detectProject();
+    vscode.commands.registerCommand('whatnext.saveSession', async (projectArg?: unknown) => {
+      const project = typeof projectArg === 'string' && projectArg ? projectArg : detectProject();
       if (!project) {
         vscode.window.showWarningMessage('What Next: no project folder open.');
         return;
@@ -65,10 +66,8 @@ export function activate(ctx: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('whatnext.openContextCard', async () => {
       const project = detectProject();
       if (!project) return;
-      const { homedir } = await import('os');
-      const path = `${homedir()}/.whatnext/agents/${project}.md`;
       try {
-        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(cardPath(project)));
         await vscode.window.showTextDocument(doc, { preview: true });
       } catch {
         vscode.window.showWarningMessage(`No context card found for "${project}". Save a session first.`);
@@ -108,24 +107,26 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
   );
 
-  // Auto-prompt on window close if enabled
+  // One workspace-folder listener for the whole extension: refresh the panel,
+  // and when a folder is closed out of the workspace offer to save a session
+  // for it if whatnext.autoPromptOnClose is on (read at event time, so the
+  // setting applies without a reload). VS Code gives extensions no hook to
+  // prompt while the whole window is closing.
   ctx.subscriptions.push(
-    vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh())
-  );
-
-  if (vscode.workspace.getConfiguration('whatnext').get<boolean>('autoPromptOnClose', false)) {
-    ctx.subscriptions.push(
-      vscode.window.onDidCloseTerminal(async () => {
-        const project = detectProject();
-        if (!project) return;
+    vscode.workspace.onDidChangeWorkspaceFolders(async (e) => {
+      provider.refresh();
+      if (!vscode.workspace.getConfiguration('whatnext').get<boolean>('autoPromptOnClose', false)) return;
+      for (const folder of e.removed) {
+        const project = folder.name;
+        if (!project) continue;
         const choice = await vscode.window.showInformationMessage(
           `Save session to What Next for "${project}"?`,
           'Save', 'Skip'
         );
-        if (choice === 'Save') vscode.commands.executeCommand('whatnext.saveSession');
-      })
-    );
-  }
+        if (choice === 'Save') await vscode.commands.executeCommand('whatnext.saveSession', project);
+      }
+    })
+  );
 }
 
 export function deactivate(): void {}

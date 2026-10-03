@@ -39,11 +39,13 @@ exports.getContextCard = getContextCard;
 exports.saveSession = saveSession;
 exports.getWhatsNext = getWhatsNext;
 const vscode = __importStar(require("vscode"));
+const promises_1 = require("fs/promises");
+const cardName_1 = require("./cardName");
 function baseUrl() {
     return vscode.workspace.getConfiguration('whatnext').get('apiUrl', 'http://localhost:3747');
 }
 async function get(path) {
-    const res = await fetch(`${baseUrl()}${path}`);
+    const res = await fetch(`${baseUrl()}${path}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok)
         throw new Error(`What Next API error: ${res.status}`);
     return res.json();
@@ -74,10 +76,7 @@ async function getOrientation(project) {
 }
 async function getContextCard(project) {
     try {
-        const { homedir } = await Promise.resolve().then(() => __importStar(require('os')));
-        const { readFileSync } = await Promise.resolve().then(() => __importStar(require('fs')));
-        const path = `${homedir()}/.whatnext/agents/${project}.md`;
-        return readFileSync(path, 'utf8');
+        return await (0, promises_1.readFile)((0, cardName_1.cardPath)(project), 'utf8');
     }
     catch {
         return null;
