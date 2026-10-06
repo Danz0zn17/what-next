@@ -29,7 +29,8 @@ export function parseSecretArgs(argv) {
     const next = () => argv[++i];
     if (a === '--to') opts.to = String(next() ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     else if (a === '--url') opts.url = next();
-    else if (a === '--env-file') opts.envFile = next();
+    // --env-path is what the entry window gets: Node 26 takes --env-file as its own flag even after the script
+    else if (a === '--env-file' || a === '--env-path') opts.envFile = next();
     else if (a === '--cwd') opts.cwd = next();
     else if (a === '--result') opts.result = next();
     else if (a === '--timeout') opts.timeout = Number(next());
@@ -290,7 +291,7 @@ function readResult(file) {
 export async function launchSecret(opts, wnPath) {
   const dir = mkdtempSync(join(tmpdir(), 'wn-secret-'));
   const resultFile = join(dir, 'result.json');
-  const childArgs = [opts.name, '--to', opts.to.join(','), '--env-file', opts.envFile, '--cwd', opts.cwd, '--here', '--result', resultFile];
+  const childArgs = [opts.name, '--to', opts.to.join(','), '--env-path', opts.envFile, '--cwd', opts.cwd, '--here', '--result', resultFile];
   const command = [process.execPath, wnPath, 'secret', ...childArgs].map(shellQuote).join(' ') + '; exit';
 
   if (opts.url) openUrl(opts.url);
