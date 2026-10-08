@@ -153,3 +153,31 @@ test('codex install end to end: backs up and splices the real file under a temp 
   assert.equal(baks.length, 1);
   assert.equal(readFileSync(join(dirname(cfg), baks[0]), 'utf8'), original);
 });
+
+test('local-only: plist and systemd unit carry no cloud URL or key', () => {
+  const xml = buildPlist({ programArgs: ['/bin/zsh', '/x/start-api.sh'], logsDir: '/L', root: '/r', home: '/h', cloudUrl: null, key: null });
+  assert.ok(!xml.includes('WHATNEXT_CLOUD_URL'));
+  assert.ok(!xml.includes('WHATNEXT_API_KEY'));
+  assert.ok(xml.includes('<key>WHATNEXT_PREFER_LOCAL</key>'));
+  const unit = buildSystemdUnit({ nodeExec: '/usr/bin/node', root: '/opt/wn', cloudUrl: null, key: null });
+  assert.ok(!unit.includes('WHATNEXT_CLOUD_URL'));
+  assert.ok(!unit.includes('WHATNEXT_API_KEY'));
+});
+
+test('local-only: --local writes a Codex config without cloud settings', () => {
+  const home = mkdtempSync(join(tmpdir(), 'wn-local-'));
+  execFileSync(process.execPath, [INSTALL, '--client', 'codex', '--local'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+    stdio: 'pipe',
+  });
+  const out = readFileSync(join(home, '.codex', 'config.toml'), 'utf8');
+  assert.ok(out.includes('[mcp_servers.what-next]'));
+  assert.ok(out.includes('WHATNEXT_PREFER_LOCAL = "1"'));
+  assert.ok(!out.includes('WHATNEXT_API_KEY'));
+  assert.ok(!out.includes('WHATNEXT_CLOUD_URL'));
+});
+
+test('postinstall check resolves a hoisted onnxruntime-node', () => {
+  const out = execFileSync(process.execPath, [join(dirname(INSTALL), 'postinstall-check.cjs')], { stdio: 'pipe' }).toString();
+  assert.match(out, /OK: onnxruntime binding present/);
+});
