@@ -14,6 +14,7 @@
  *   wn dump                             — interactive session dump (prompts for fields)
  *   wn fact                             — interactive fact store
  *   wn install --client <x> --key <k>   — run the MCP installer
+ *   wn install --client <x> --local     - local-only install (no cloud backup or sync)
  *   wn open                             — open the web UI in your browser
  *   wn status                           — health check for local + cloud services
  */
@@ -369,6 +370,7 @@ ${bold('Commands:')}
   ${col('cyan', 'wn status')}                      Health check: local + cloud
   ${col('cyan', 'wn open')}                        Open web UI in browser
   ${col('cyan', 'wn install')} ${col('yellow', '--client <x> --key <k>')}  Run MCP installer
+  ${col('cyan', 'wn install')} ${col('yellow', '--client <x> --local')}    Local-only install (no cloud)
   ${col('cyan', 'wn secret')} ${col('yellow', '<NAME> --to env,netlify')}  Enter a secret in a separate terminal, never in chat
   ${col('cyan', 'wn guard install')}               Stop Claude Code printing secrets (adds a hook)
 
