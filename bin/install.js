@@ -9,6 +9,7 @@
  *   node bin/install.js --client vscode  --key bak_xxx
  *   node bin/install.js --client codex   --key bak_xxx
  *   node bin/install.js --client cursor  --key bak_xxx
+ *   node bin/install.js --client claude  --local      (no cloud: memory stays on this machine)
  *   node bin/install.js --client openclaw
  *
  * Supported clients: claude, vscode, copilot, cursor, windsurf, codex, openclaw
@@ -216,11 +217,11 @@ ${programArgs.map(a => `        <string>${x(a)}</string>`).join('\n')}
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>WHATNEXT_NODE</key>
         <string>${x(nodeExec)}</string>
-        <key>WHATNEXT_CLOUD_URL</key>
+${cloudUrl && key ? `        <key>WHATNEXT_CLOUD_URL</key>
         <string>${x(cloudUrl)}</string>
         <key>WHATNEXT_API_KEY</key>
         <string>${x(key)}</string>
-        <key>WHATNEXT_PREFER_LOCAL</key>
+` : ''}        <key>WHATNEXT_PREFER_LOCAL</key>
         <string>1</string>
         <key>WHATNEXT_CLOUD_SYNC_MODE</key>
         <string>background</string>
@@ -246,8 +247,7 @@ export function systemdQuote(value) {
 export function buildSystemdUnit({ nodeExec, root, cloudUrl, key }) {
   const q = systemdQuote;
   const env = {
-    WHATNEXT_CLOUD_URL: cloudUrl,
-    WHATNEXT_API_KEY: key,
+    ...(cloudUrl && key ? { WHATNEXT_CLOUD_URL: cloudUrl, WHATNEXT_API_KEY: key } : {}),
     WHATNEXT_PREFER_LOCAL: '1',
     WHATNEXT_CLOUD_SYNC_MODE: 'background',
     WHATNEXT_PORT: '3747',
@@ -276,6 +276,25 @@ export function buildSystemdUnit({ nodeExec, root, cloudUrl, key }) {
 function arg(flag) {
   const i = process.argv.indexOf(flag);
   return i !== -1 ? process.argv[i + 1] : null;
+}
+
+// Returns a bak_ key, or null for a local-only install (--local, or Enter at the prompt).
+// Local-only: memory stays on this machine; no cloud URL or key is written anywhere.
+async function resolveApiKey(apiKey, heading) {
+  if (process.argv.includes('--local')) return null;
+  if (!apiKey) {
+    console.log(`\n${heading}\n`);
+    apiKey = await prompt('Your What Next API key (from your welcome email), or press Enter for local-only: ');
+    if (!apiKey) {
+      console.log('\nLocal-only install: memory stays on this machine, no cloud backup or sync.');
+      return null;
+    }
+  }
+  if (!apiKey.startsWith('bak_')) {
+    console.error('\nAPI key should start with "bak_" - check your welcome email.\n');
+    process.exit(1);
+  }
+  return apiKey;
 }
 
 // ─── Prompt helper ───────────────────────────────────────────────────────────
@@ -319,15 +338,7 @@ async function main() {
   // same config file. We handle this separately because it uses TOML, not JSON.
 
   if (client === 'codex') {
-    if (!apiKey) {
-      console.log('\nWhat Next - MCP installer (Codex)\n');
-      apiKey = await prompt('Your What Next API key (from your welcome email): ');
-    }
-
-    if (!apiKey || !apiKey.startsWith('bak_')) {
-      console.error('\nAPI key should start with "bak_" - check your welcome email.\n');
-      process.exit(1);
-    }
+    apiKey = await resolveApiKey(apiKey, 'What Next - MCP installer (Codex)');
 
     const configPath = join(H, '.codex', 'config.toml');
 
@@ -345,8 +356,7 @@ async function main() {
       'WHATNEXT_CLOUD_SYNC_MODE = "background"',
       'WHATNEXT_BOOT_RETRIES = "12"',
       'WHATNEXT_BOOT_DELAY_MS = "750"',
-      'WHATNEXT_CLOUD_URL = "https://what-next-production.up.railway.app"',
-      `WHATNEXT_API_KEY = "${apiKey}"`,
+      ...(apiKey ? [`WHATNEXT_CLOUD_URL = "${CLOUD_URL}"`, `WHATNEXT_API_KEY = "${apiKey}"`] : []),
     ].join('\n');
 
     const content = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
@@ -377,15 +387,7 @@ async function main() {
 
   // ─── Collect API key ─────────────────────────────────────────────────────────
 
-  if (!apiKey) {
-    console.log('\nWhat Next - MCP installer\n');
-    apiKey = await prompt('Your What Next API key (from your welcome email): ');
-  }
-
-  if (!apiKey || !apiKey.startsWith('bak_')) {
-    console.error('\nAPI key should start with "bak_" - check your welcome email.\n');
-    process.exit(1);
-  }
+  apiKey = await resolveApiKey(apiKey, 'What Next - MCP installer');
 
   // ─── Build the server entry ──────────────────────────────────────────────────
 
@@ -401,8 +403,7 @@ async function main() {
       WHATNEXT_CLOUD_SYNC_MODE: 'background',
       WHATNEXT_BOOT_RETRIES: '12',
       WHATNEXT_BOOT_DELAY_MS: '750',
-      WHATNEXT_API_KEY: apiKey,
-      WHATNEXT_CLOUD_URL: CLOUD_URL,
+      ...(apiKey ? { WHATNEXT_API_KEY: apiKey, WHATNEXT_CLOUD_URL: CLOUD_URL } : {}),
     },
   };
 
@@ -481,7 +482,7 @@ function setupMacOSLaunchAgent(key) {
     ? ['/bin/zsh', startScript]
     : [nodeExec, bootstrapEntry, 'src/api-server.js', 'api'];
 
-  const plistXml = buildPlist({ programArgs, logsDir, root: ROOT, home: H, cloudUrl: CLOUD_URL, key });
+  const plistXml = buildPlist({ programArgs, logsDir, root: ROOT, home: H, cloudUrl: key ? CLOUD_URL : null, key });
 
   try {
     mkdirSync(launchAgentsDir, { recursive: true });
@@ -529,7 +530,7 @@ function setupSystemdUserService(key) {
   const unitDir = join(process.env.XDG_CONFIG_HOME || join(H, '.config'), 'systemd', 'user');
   const unitPath = join(unitDir, 'what-next-api.service');
   try {
-    const unit = buildSystemdUnit({ nodeExec: process.execPath, root: ROOT, cloudUrl: CLOUD_URL, key });
+    const unit = buildSystemdUnit({ nodeExec: process.execPath, root: ROOT, cloudUrl: key ? CLOUD_URL : null, key });
     mkdirSync(unitDir, { recursive: true });
     const backup = backupFile(unitPath);
     writeFileSync(unitPath, unit, { mode: 0o600 });

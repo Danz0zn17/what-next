@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Installing inside a project folder no longer fails the postinstall check.** The check looked for
+  onnxruntime only inside What Next's own `node_modules`, so it failed whenever npm hoisted it to the
+  project's `node_modules`. It now resolves onnxruntime the way Node does. Global installs are unchanged.
+
+### Added
+- **Local-only install.** `install-what-next --client claude --local` (or press Enter at the API key
+  prompt) sets up What Next with no cloud URL or key: memory stays on this machine, with no cloud
+  backup or sync. Add a key later by re-running the installer with `--key`.
+
 ### Security (cloud)
 - **API keys are no longer stored in plaintext.** Only a sha256 hash is kept; a key is shown once, in
   the welcome email (or the admin create response). On boot the cloud clears existing plaintext keys

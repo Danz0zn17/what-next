@@ -73,6 +73,8 @@ install-what-next --client claude  --key bak_xxx
 install-what-next --client vscode  --key bak_xxx
 # VS Code Codex extension or Codex CLI
 install-what-next --client codex   --key bak_xxx
+# Local-only (no cloud backup or sync; memory stays on this machine)
+install-what-next --client claude  --local
 ```
 
 > **Prefer cloning the repo?** (for contributors or self-hosters)
