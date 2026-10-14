@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- **MCP SDK updated to 1.32.1** (from 1.29.0) to clear GHSA-6qxp-vccf-f47h, where a malicious MCP
+  server could steer an OAuth client to the wrong authorisation server. What Next only uses the
+  SDK's stdio server, not its OAuth client, so this closes the audit finding rather than a live path.
+
 ### Security (cloud)
 - **API keys are no longer stored in plaintext.** Only a sha256 hash is kept; a key is shown once, in
   the welcome email (or the admin create response). On boot the cloud clears existing plaintext keys
