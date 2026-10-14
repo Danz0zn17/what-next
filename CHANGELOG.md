@@ -13,6 +13,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   wherever the stored hash matches, so every existing key keeps working. Re-sending a welcome email
   that never arrived now issues a fresh key, and is refused for an account whose key is already in use.
 
+### Security
+- sharp override bumped to 0.35.5 (libvips 8.18.7, librsvg advisory GHSA-wq5f-xc86-pv6w). Clears the
+  sharp high and drops `@huggingface/transformers` from high to moderate in `npm audit --omit=dev`.
+
 ## [2.4.0] - 2026-10-03
 
 Fixes from a full QA sweep of every surface: npm package, local API, MCP server, cloud, sync,
