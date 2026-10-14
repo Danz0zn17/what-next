@@ -9,6 +9,9 @@ cloud-server/
 agent-blue-setup/
 .claude/
 
+# Written at build time from env vars (scripts/write-monitoring-config.mjs)
+landing/monitoring-config.js
+
 # Local Netlify folder
 .netlify
 vscode-extension/*.vsix
