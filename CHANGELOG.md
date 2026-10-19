@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Optional remote access over Streamable HTTP** (`npm run mcp:http`, `src/http-mcp.js`). Serves the same
+  14 tools as the stdio server so another machine on your tailnet, or claude.ai through Tailscale Funnel,
+  can use your memory. Off unless you start it. Binds to 127.0.0.1 only, refuses to start without
+  `WHATNEXT_MCP_HTTP_TOKEN` (32+ chars), requires `Authorization: Bearer`, checks the Host header against
+  an allowlist, and runs stateless. The stdio server and the REST API on 3747 are unchanged.
+
+### Changed
+- Tool registration moved from `src/server.js` to `src/mcp-tools.js` (`createServer()`), so both entry
+  points share one tool set. `src/server.js` is still the stdio entry; no config changes needed.
+
 ### Security (cloud)
 - **API keys are no longer stored in plaintext.** Only a sha256 hash is kept; a key is shown once, in
   the welcome email (or the admin create response). On boot the cloud clears existing plaintext keys

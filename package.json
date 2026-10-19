@@ -15,6 +15,7 @@
   "scripts": {
     "start": "node src/cloud-server.js",
     "mcp": "node src/server.js",
+    "mcp:http": "node src/http-mcp.js",
     "cloud": "node src/cloud-server.js",
     "api": "node bin/local-api.js",
     "test": "node --test --test-concurrency=1",

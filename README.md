@@ -406,6 +406,31 @@ Add to `~/.hermes/cron/jobs.json`:
 
 ---
 
+## Optional: Remote access (other devices, claude.ai)
+
+By default the MCP server only talks to apps on the same machine over stdio. If you want to reach your memory from another device, run the optional HTTP entry point alongside it. It serves the same tools, and nothing changes for your existing setup.
+
+```bash
+export WHATNEXT_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"   # keep this secret
+npm run mcp:http                                            # http://127.0.0.1:3748/mcp
+```
+
+It listens on `127.0.0.1` only, so nothing is reachable off the machine until you put a proxy in front of it. With [Tailscale](https://tailscale.com):
+
+- **Your own devices only:** `tailscale serve --bg 3748`
+- **claude.ai web and mobile:** `tailscale funnel --bg 3748` (public URL; the token is what protects it)
+
+Then add your `*.ts.net` hostname to `WHATNEXT_MCP_HTTP_ALLOWED_HOSTS` and connect the client to `https://<host>.ts.net/mcp` with the header `Authorization: Bearer <token>`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WHATNEXT_MCP_HTTP_TOKEN` | *(required)* | Bearer token, 32+ characters. The server will not start without it. |
+| `WHATNEXT_MCP_HTTP_PORT` | `3748` | Local port. |
+| `WHATNEXT_MCP_HTTP_ALLOWED_HOSTS` | localhost only | Extra `Host` values to accept, comma-separated. |
+| `WHATNEXT_MCP_HTTP_ALLOW_PATH_TOKEN` | off | Set to `1` to also accept `POST /mcp/<token>` for clients that can't send headers. The token then appears in URLs, so use the header when you can. |
+
+Do not expose the REST API on 3747 this way. It has no auth and relies on being localhost-only.
+
 ## Troubleshooting
 
 **Tools don't appear in Claude/VS Code**
