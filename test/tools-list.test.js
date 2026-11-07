@@ -72,7 +72,8 @@ async function listTools() {
 
 test('every tool has a one-line description and the schema stays small', { timeout: 200_000 }, async () => {
   const tools = await listTools();
-  assert.equal(tools.length, 14);
+  assert.equal(tools.length, 17);
+  for (const name of ['review_fact', 'get_page', 'update_page']) assert.ok(tools.some(t => t.name === name), `${name} missing`);
   for (const t of tools) {
     assert.ok(t.description && t.description.length > 20, `${t.name} has no description`);
     assert.ok(t.description.length < 400, `${t.name} description too long`);
