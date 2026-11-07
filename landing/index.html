@@ -48,13 +48,6 @@
   }
   </script>
 
-  <!-- Plausible analytics -->
-  <script async src="https://plausible.io/js/pa-0RzXCzHdc2c8-ONZ_LIdw.js"></script>
-  <script>
-    window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
-    plausible.init()
-  </script>
-
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -451,6 +444,13 @@
     .feature-card-wide { grid-column: 1 / -1; }
     .hero-content { animation: slideUp 0.75s cubic-bezier(0.16,1,0.3,1) both; }
     @keyframes slideUp { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+
+    /* REDUCED MOTION: no entrance, reveal, blink, bounce or pulse; content shows at once */
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
 
     /* RESPONSIVE */
     @media (max-width: 800px) {
@@ -1001,6 +1001,7 @@
       <div class="footer-left">
         &copy; 2026 What Next &middot;
         <a href="/terms">Terms &amp; Conditions</a> &middot;
+        <a href="/privacy">Privacy</a> &middot;
         <a href="https://whatnextai.co.za">whatnextai.co.za</a>
       </div>
       <div class="footer-by">
@@ -1023,11 +1024,12 @@
   }, { passive: true });
 }());
 
-/* 2. CANVAS NEURAL NET */
+/* 2. CANVAS NEURAL NET - one still frame under reduced motion; paused when the tab is hidden */
+var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 (function () {
   var canvas = document.getElementById('bg-canvas');
   var ctx = canvas.getContext('2d');
-  var W, H, nodes, raf;
+  var W, H, nodes, raf = 0, onScreen = true;
   var mouse = { x: -9999, y: -9999 };
   window.addEventListener('mousemove', function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, { passive: true });
   function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
@@ -1036,10 +1038,10 @@
     for (var i = 0; i < n; i++) a.push({ x: Math.random()*W, y: Math.random()*H, vx: (Math.random()-0.5)*0.19, vy: (Math.random()-0.5)*0.19, r: Math.random()*1.3+0.4 });
     return a;
   }
-  function tick() {
+  function draw(move) {
     ctx.clearRect(0, 0, W, H);
     var MAX = 145, MR = 190, i, j, n, dx, dy, d, a, f, spd;
-    for (i = 0; i < nodes.length; i++) {
+    if (move) for (i = 0; i < nodes.length; i++) {
       n = nodes[i]; dx = n.x - mouse.x; dy = n.y - mouse.y; d = Math.sqrt(dx*dx+dy*dy);
       if (d < MR && d > 0) { f = (MR-d)/MR*0.014; n.vx += dx/d*f; n.vy += dy/d*f; }
       spd = Math.sqrt(n.vx*n.vx+n.vy*n.vy);
@@ -1053,15 +1055,24 @@
       if (d < MAX) { a = (1-d/MAX)*0.065; ctx.beginPath(); ctx.moveTo(nodes[i].x,nodes[i].y); ctx.lineTo(nodes[j].x,nodes[j].y); ctx.strokeStyle='rgba(99,102,241,'+a+')'; ctx.lineWidth=0.75; ctx.stroke(); }
     }
     for (i = 0; i < nodes.length; i++) {
-      dx = nodes[i].x-mouse.x; dy = nodes[i].y-mouse.y; d = Math.sqrt(dx*dx+dy*dy);
+      dx = nodes[i].x-mouse.x; dy = nodes[i].y-mouse.y; d = move ? Math.sqrt(dx*dx+dy*dy) : Infinity;
       var glow = d < MR ? (1-d/MR)*0.6+0.18 : 0.18;
       ctx.beginPath(); ctx.arc(nodes[i].x,nodes[i].y,nodes[i].r,0,Math.PI*2);
       ctx.fillStyle='rgba(99,102,241,'+glow+')'; ctx.fill();
     }
-    raf = requestAnimationFrame(tick);
   }
-  resize(); nodes = makeNodes(70); tick();
-  window.addEventListener('resize', function () { cancelAnimationFrame(raf); resize(); nodes = makeNodes(70); tick(); });
+  function tick() { draw(true); raf = requestAnimationFrame(tick); }
+  function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+  // Runs only when motion is allowed, the tab is visible and the canvas is on screen.
+  function sync() {
+    if (reduceMotion.matches || document.hidden || !onScreen) { stop(); if (reduceMotion.matches) draw(false); }
+    else if (!raf) tick();
+  }
+  resize(); nodes = makeNodes(70); draw(false); sync();
+  window.addEventListener('resize', function () { stop(); resize(); nodes = makeNodes(70); draw(false); sync(); });
+  document.addEventListener('visibilitychange', sync);
+  if (reduceMotion.addEventListener) reduceMotion.addEventListener('change', sync);
+  if ('IntersectionObserver' in window) new IntersectionObserver(function (entries) { onScreen = entries[0].isIntersecting; sync(); }).observe(canvas);
 }());
 
 /* 3. SCROLL REVEALS */
@@ -1099,7 +1110,7 @@
   ];
   var fired = false; var SPEED = 24;
   new IntersectionObserver(function (entries) {
-    if (entries[0].isIntersecting && !fired) { fired = true; body.innerHTML = ''; body.appendChild(cursor); run(0, 0); }
+    if (entries[0].isIntersecting && !fired) { fired = true; body.innerHTML = ''; body.appendChild(cursor); if (reduceMotion.matches) showAll(); else run(0, 0); }
   }, { threshold: 0.3 }).observe(term);
   function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function colorInput(text) {
@@ -1107,6 +1118,17 @@
     if (!m) return esc(text);
     var rest = esc(m[2]).replace(/(&quot;[^&]*&quot;)/g,'<span class="t-str">$1</span>');
     return '<span class="t-fn">'+esc(m[1])+'</span>'+rest;
+  }
+  // Reduced motion: the finished transcript, no typing.
+  function showAll() {
+    script.forEach(function (s) {
+      if (s.t === 'pause') return;
+      var ln = document.createElement('span');
+      if (s.t === 'br') { ln.className = 't-br'; }
+      else if (s.t === 'type') { ln.className = 'term-line'; ln.innerHTML = '<span class="t-prompt">›</span>' + colorInput(s.v) + '<br>'; }
+      else { ln.className = 'term-line'; ln.innerHTML = '<span class="' + (s.t==='ok' ? 't-ok' : s.t==='cmt' ? 't-dim' : 't-out') + '">' + esc(s.v) + '</span><br>'; }
+      body.insertBefore(ln, cursor);
+    });
   }
   function run(step, ci) {
     if (step >= script.length) return;
@@ -1139,6 +1161,7 @@
   new IntersectionObserver(function (entries) {
     if (entries[0].isIntersecting && !fired) {
       fired = true;
+      if (reduceMotion.matches) return;
       cards.forEach(function (card, i) {
         setTimeout(function () { card.classList.add('seq-lit'); setTimeout(function(){card.classList.remove('seq-lit');},650); }, i*200);
       });

@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Install from npm into a project or prefix.** The postinstall check (now `bin/check-onnx.cjs`)
+  looked for `onnxruntime-node` only inside the package folder, so installs where npm hoists it to
+  the install root failed. It now finds the binding the way Node does (nested, hoisted or under
+  `@huggingface/transformers`). `test/pack-install.test.js` packs the real tarball, installs it into
+  a fresh prefix and runs `wn` and `install-what-next` (skip offline with `WHATNEXT_SKIP_PACK_TEST=1`).
+- **Stale values on entity pages.** A page field seeded from a fact now keeps that fact's id and
+  last-checked time (`fact_id`, `checked_at`, additive). Page fields, page lists and role-block page
+  snippets show `[STALE]` or `[DISPUTED]` when the source fact is, instead of reading as freshly
+  checked. `GET /page/:slug` adds `field_freshness`.
+
+### Changed
+- Landing page: respects `prefers-reduced-motion` (no entrance, reveal, typing or canvas loop;
+  one still frame), pauses the canvas when the tab is hidden or it is offscreen, adds a Privacy
+  page (`/privacy`) linked from the footer and terms, and drops the Plausible script (it returned
+  404; PostHog is the analytics source).
+
 ## [2.5.0] - 2026-11-07
 
 Memory that checks itself, not just stores things. Based on Anthropic's "components of agent
