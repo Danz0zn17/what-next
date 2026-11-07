@@ -23,6 +23,7 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { freshnessMarker } from './freshness.js';
 import { getProjectIntelligence, getRecentSessions, getRecentSessionsForProject, getWhatsNext, getAllFacts, listProjects, getRecentCommits, getHotFiles } from './db.js';
 import { neutralize, DATA_NOTICE } from './sanitize.js';
 
@@ -166,7 +167,7 @@ export function writeSidecarForProject(projectName) {
 
     if (lessons.length > 0) {
       lines.push('## Lessons (do not repeat these mistakes)');
-      for (const f of lessons) lines.push(`- ${truncate(f.content, 240)}`);
+      for (const f of lessons) lines.push(`- ${truncate(f.content, 240)}${freshnessMarker(f)}`);
       lines.push('');
     }
 
@@ -392,14 +393,14 @@ export function writeGlobalContext() {
     const lessons = globalFacts.filter(f => f.category === 'lesson');
     if (lessons.length > 0) {
       lines.push('## Lessons (do not repeat these mistakes)');
-      for (const f of lessons) lines.push(`- ${truncate(f.content, 200)}`);
+      for (const f of lessons) lines.push(`- ${truncate(f.content, 200)}${freshnessMarker(f)}`);
       lines.push('');
     }
 
     if (globalFacts.length > 0) {
       lines.push('## Global Facts & Preferences');
       for (const f of globalFacts.filter(f => f.category !== 'lesson')) {
-        lines.push(`- **${oneLine(f.category)}:** ${truncate(f.content, 200)}`);
+        lines.push(`- **${oneLine(f.category)}:** ${truncate(f.content, 200)}${freshnessMarker(f)}`);
       }
       lines.push('');
     }

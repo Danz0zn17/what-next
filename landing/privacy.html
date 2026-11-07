@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - What Next</title>
+  <meta name="description" content="How What Next and whatnextai.co.za handle your data: what stays on your machine, what syncs to the cloud, and what this website measures.">
+  <link rel="canonical" href="https://whatnextai.co.za/privacy">
+  <meta property="og:title" content="Privacy Policy - What Next">
+  <meta property="og:description" content="How What Next and whatnextai.co.za handle your data: what stays on your machine, what syncs to the cloud, and what this website measures.">
+  <meta property="og:url" content="https://whatnextai.co.za/privacy">
+  <meta property="og:image" content="https://whatnextai.co.za/og.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #060606;
+      --bg-1:     #0c0c0c;
+      --border:   rgba(255,255,255,0.07);
+      --text-1:   #f0f0f0;
+      --text-2:   #888;
+      --accent:   #6366f1;
+      --r:        6px;
+    }
+    body { background: var(--bg); color: var(--text-1); font-family: 'Inter', sans-serif; font-size: 15px; line-height: 1.75; -webkit-font-smoothing: antialiased; }
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      border-bottom: 1px solid var(--border);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      backdrop-filter: blur(20px) saturate(160%);
+      background: rgba(6,6,6,0.7);
+    }
+    .nav-inner { max-width: 760px; margin: 0 auto; padding: 0 32px; height: 56px; display: flex; align-items: center; justify-content: space-between; }
+    .logo { font-size: 14px; font-weight: 500; color: var(--text-1); text-decoration: none; }
+    .nav-back { font-size: 13px; color: var(--text-2); text-decoration: none; }
+    .nav-back:hover { color: var(--text-1); }
+    main { max-width: 760px; margin: 0 auto; padding: 100px 32px 80px; }
+    h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 8px; }
+    .meta { font-size: 13px; color: var(--text-2); margin-bottom: 48px; }
+    h2 { font-size: 16px; font-weight: 600; margin: 36px 0 10px; }
+    p { color: var(--text-2); margin-bottom: 14px; }
+    ul { color: var(--text-2); padding-left: 20px; margin-bottom: 14px; }
+    li { margin-bottom: 6px; }
+    a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+    a:hover { text-decoration: underline; }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+    footer { border-top: 1px solid var(--border); padding: 24px 32px; text-align: center; font-size: 13px; color: var(--text-2); }
+    footer a { color: var(--text-2); text-decoration: none; }
+    footer a:hover { color: var(--text-1); }
+  </style>
+  <script src="/monitoring-config.js" defer></script>
+  <script src="/monitoring.js" defer></script>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="logo">What Next</a>
+    <a href="/" class="nav-back">Back to home</a>
+  </div>
+</nav>
+
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="meta">Effective date: 7 November 2026 &nbsp;&middot;&nbsp; What Next is operated by Greenberries, Durban, South Africa</p>
+
+  <p>This page explains what data What Next (the tool) and whatnextai.co.za (this website) handle, where it is kept and how to remove it. It sits alongside our <a href="/terms">Terms &amp; Conditions</a>, which cover use of the tool.</p>
+
+  <h2>1. The tool: your memory stays on your machine</h2>
+  <p>What Next stores what you and your AI assistants choose to save - session summaries, decisions, next steps, facts, project intelligence (stack, folders, conventions), entity pages, feedback on facts, and git commit metadata (messages, times and changed file names, never file contents). By default all of it lives in a local SQLite database under <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/data/</code> and in context cards under <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/agents/</code> on your own computer.</p>
+  <p>What Next never reads or uploads your source code, file contents, passwords or credentials. Text that looks like a secret or an instruction aimed at an AI is neutralised or flagged when it is saved.</p>
+
+  <h2>2. Optional cloud sync</h2>
+  <p>If you set an API key (<code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">WHATNEXT_API_KEY</code>), your saved memory is copied in the background to a Postgres database we run on Railway, so your other machines and tools can read it. Without a key nothing leaves your computer. Remove the key to stop syncing.</p>
+
+  <h2>3. This website</h2>
+  <ul>
+    <li><strong>Beta sign-up form</strong> - the name, email and optional details you enter are stored by Netlify Forms (our host) and used only to contact you about beta access and product updates.</li>
+    <li><strong>Page views</strong> - we may count page views with PostHog. It is set up without cookies or local storage, without click autocapture and without session recording, so it cannot follow you between visits.</li>
+    <li><strong>Error reports</strong> - if a script on this site breaks, Sentry may receive the error, the page address and your browser type, so we can fix it.</li>
+    <li><strong>Fonts</strong> - fonts load from Google Fonts, which receives your IP address as part of the request.</li>
+  </ul>
+  <p>We do not use advertising trackers, we do not sell or rent your data and we do not use it for advertising.</p>
+
+  <h2>4. Who processes data for us</h2>
+  <p>Netlify (website hosting and forms), Railway (cloud sync database), PostHog (page view counts), Sentry (error reports) and Google Fonts. Some of these run outside South Africa; we use them only to operate What Next.</p>
+
+  <h2>5. Your rights under POPIA</h2>
+  <p>You may ask what personal information we hold about you, and ask us to correct or delete it. Email <a href="mailto:hello@greenberries.co.za">hello@greenberries.co.za</a>.</p>
+  <ul>
+    <li><strong>Local data</strong> - delete the <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/</code> folder on your machine.</li>
+    <li><strong>Cloud data</strong> - email us with your API key or sign-up email and we will delete your cloud records within 7 business days.</li>
+    <li><strong>Beta sign-up</strong> - email us from the address you signed up with and we will remove it.</li>
+  </ul>
+  <p>You may also complain to the Information Regulator of South Africa (<a href="https://inforegulator.org.za" target="_blank" rel="noopener">inforegulator.org.za</a>).</p>
+
+  <h2>6. Changes</h2>
+  <p>If this policy changes we will update the effective date above and tell beta users of material changes by email.</p>
+
+  <hr class="divider">
+  <p style="font-size:13px">Questions: <a href="mailto:hello@greenberries.co.za">hello@greenberries.co.za</a> &nbsp;&middot;&nbsp; <a href="https://greenberries.co.za" target="_blank" rel="noopener">greenberries.co.za</a></p>
+</main>
+
+<footer>
+  &copy; 2026 What Next &nbsp;&middot;&nbsp; <a href="/">Back to home</a> &nbsp;&middot;&nbsp; <a href="/terms">Terms</a> &nbsp;&middot;&nbsp;
+  <a href="https://greenberries.co.za" target="_blank" rel="noopener">Built by Greenberries</a>
+</footer>
+
+</body>
+</html>

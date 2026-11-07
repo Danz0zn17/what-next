@@ -145,7 +145,7 @@ test('serves the same tools over HTTP, with auth enforced', { timeout: 120_000 }
     assert.equal(i.json.result.serverInfo.name, 'what-next');
 
     const list = await rpc(port, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-    assert.equal(list.json.result.tools.length, 14);
+    assert.equal(list.json.result.tools.length, 17);
 
     // Round trip through the real database: write a fact, find it again.
     const marker = `httpmcp${Date.now()}`;

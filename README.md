@@ -19,6 +19,8 @@ What Next is a persistent memory engine for developers. It learns from every ses
 
 **v2.2 - Hardened and self-syncing:** The local API now answers only this machine: it rejects foreign `Host` headers, cross-site writes and non-JSON writes, so no web page you visit can read or plant memory. Every local write is indexed for semantic search immediately, rows written while offline are pushed to the cloud on the next sync, and read tools answer from local SQLite first when `WHATNEXT_PREFER_LOCAL=1`.
 
+**v2.5 - Memory that checks itself:** What Next now goes back over what it stores, not just adds to it. Every fact carries where it came from and when it was last checked; facts that change in the real world (contacts, prices, URLs, deploy targets, status) are marked stale after 30 days instead of being passed on as true. A dreaming pass (`curate_memory` with `mode: "full"`, or `npm run dream`) fixes facts reported wrong, merges duplicates, turns lessons from your sessions into facts, flags facts that contradict each other and lists what is due for a re-check. Each client and product gets a linked page (repo, hosting, database, live or not, open issues, last decision). Agents can ask for a short start-up block for their role. Nothing is ever deleted, and every change can be undone. See [Memory that checks itself](#memory-that-checks-itself-v25).
+
 Local is the source of truth. SQLite writes happen first on your machine; cloud sync is background-only and exists purely as backup.
 
 ---
@@ -247,10 +249,93 @@ This drops the skill into `.agents/skills/what_next/` (symlinked for Claude Code
 | `list_projects` | See all known projects with session counts and last activity. |
 | `add_fact` | Store a persistent fact (preference, config, decision) not tied to a session. Category `lesson` is shown first on every card and never auto-archived; category `tour` (a feature traced through its files) is shown on the project card. |
 | `edit_session` | Update fields on an existing session by local ID. |
-| `curate_memory` | Review stored facts for near-duplicates and archive them non-destructively. Runs daily in the background too - call with `dry_run: true` to preview. |
+| `curate_memory` | Review stored facts for near-duplicates and archive them non-destructively. Runs daily in the background too - call with `dry_run: true` to preview. `mode: "full"` runs the whole dreaming pass (below). |
+| `review_fact` | After re-checking a fact: `verify` (still true, fresh again), `retire` (no longer true, hidden, recoverable) or `restore`. Fact ids show as `#id` in search results and stale markers. |
+| `get_page` | The linked page for a client or product: repo, hosting, database, URL, live or not, open issues, last decision, links and backlinks, plus the project's facts. No slug lists all pages. |
+| `update_page` | Create or update a page. Only the fields you pass change; `null` clears one. Fields you set are never overwritten by seeding. |
+| `send_feedback` | Send a bug report or idea to the maintainer. With `fact_id` (and optionally `correction`) it also marks that fact as wrong, so agents see a warning and the dreaming pass fixes it first. |
+| `since_last_session` | Commits captured in a project since its last session. |
 
-**Schema footprint:** the full `tools/list` payload for all 14 tools, descriptions included, is about 8 KB (roughly 2,000 tokens).
+`get_context` and `get_orientation` also take an optional `role` (`ceo`, `engineer`, `qa`, `growth`, `ops`) - see [Role start-up blocks](#role-start-up-blocks). `add_fact` takes optional `source`, `volatility` (`stable` or `volatile`) and `ttl_days`.
+
+**Schema footprint:** the full `tools/list` payload for all 17 tools, descriptions included, is under 12 KB (roughly 3,000 tokens).
 That is what every session pays to have What Next available, before any tool is called.
+
+---
+
+## Memory that checks itself (v2.5)
+
+Stored memory goes out of date, and an agent trusts an old note as much as a new one. v2.5 adds the step that goes back over memory.
+
+### Fact freshness
+
+Every fact records a `source` and `last_verified_at`. Facts that change in the real world are **volatile**: contacts, prices, URLs, deploy targets, status and client details, either by category or because the text holds a URL, email, phone number or amount. Lessons are never volatile. You can say so yourself with `add_fact` `volatility` and `ttl_days`.
+
+A volatile fact that has not been checked for `ttl_days` (default 30, or `WHATNEXT_VOLATILE_TTL_DAYS`) still comes back from search and context, but with a marker:
+
+```
+deploy: Surf Rides is live at https://surf-rides.netlify.app [STALE - last checked 2026-09-01, volatile (30d). Re-check before use; review_fact id 12]
+```
+
+After checking it, call `review_fact` with `verify` (fresh again) or `retire` (no longer true). Facts saved before v2.5 are kept as they are and marked `source: unverified`; old volatile ones read as stale until someone checks them. Over REST, facts carry a `freshness` object (`state`, `volatility`, `due_at`).
+
+### Reporting a wrong fact
+
+When a memory leads to a wrong action, call `send_feedback` with its `fact_id`, and the correct text in `correction` if you know it. The fact is marked disputed straight away (shown with a `[DISPUTED ...]` marker and left out of role blocks), and the next dreaming pass deals with it first.
+
+### The dreaming pass
+
+`curate_memory` with `mode: "full"`, `POST /curate/run`, or `npm run dream`. In order, it:
+
+1. **Disputed facts:** replaces a disputed fact with its correction (the old one is marked superseded), or lists it for re-check when there is no correction.
+2. **Duplicates:** the existing curator archives near-duplicates and flags similar pairs.
+3. **Lessons:** reads the sessions saved since the last pass and turns lines marked `Lesson:`, `Gotcha:`, `Rule:` (or "Never ..." / "Always ..." in decisions) into `lesson` facts, unless the same lesson is already stored.
+4. **Contradictions:** finds similar facts that name different URLs, emails, phone numbers or amounts, and marks the older one disputed so nobody acts on it blind.
+5. **Re-check list:** volatile facts that are stale or due within 7 days.
+6. **Pages:** creates and refreshes the client and product pages.
+
+Add `dry_run: true` (or `npm run dream:dry`) to see the report without changing anything. The daily background run stays duplicates-only unless you set `WHATNEXT_DREAM=1`. The last report is at `GET /curate/run/status`.
+
+**Nothing is deleted.** Facts are marked `archived`, `superseded` or `retired` and stay recoverable. Every change is journalled, and a whole run can be undone: `POST /curate/undo` with `{"run_id": 42}`, or `npm run dream -- --undo 42`. A change someone has made by hand since the run is left alone. Undo covers facts; pages are not rolled back, since seeding only fills empty or seeded fields and you can edit any of them with `update_page`.
+
+### Linked pages
+
+One page per client and per product, with links between them, so an agent reads one page instead of rebuilding the picture from old sessions:
+
+```
+# surf-rides (product) - page "surf-rides"
+- **Repo:** github.com/you/surf-rides  _(seed, 2026-11-07)_
+- **Hosting:** Netlify site surf-rides  _(manual, 2026-11-07)_
+- **Live:** yes  _(manual, 2026-11-07)_
+- **Open issues:** 2026-11-06: wire payments  _(seed, 2026-11-07)_
+- **Last decision:** 2026-11-06: Stripe for payments  _(seed, 2026-11-07)_
+## Links
+- -> surf-rides-co (client: Surf Rides Co)
+```
+
+The dreaming pass builds product pages from your projects (project intelligence, the latest session's decisions and next steps, and `url`/`database`/`live`/`status` facts) and client pages from facts in the `client` category written as `Name: details`. Fill or correct anything with `update_page`; what you set is never overwritten by seeding. Pages are stored locally (not synced to the cloud in this version).
+
+### Role start-up blocks
+
+`get_context` and `get_orientation` take an optional `role`: `ceo`, `engineer`, `qa`, `growth` or `ops`. With one, the agent gets at most 30 lines that fit its job instead of everything:
+
+- facts tagged `role:<role>` first (tag a fact `role:qa` to put it in front of QA),
+- then the role's own categories (engineer: lessons, deploy, conventions; growth: clients, leads, pricing, contacts; and so on),
+- the pages that role works from,
+- a count of stale and disputed facts, and a pointer to search for everything else.
+
+Without `role` the output is exactly as before. Over REST: `GET /context?role=engineer` and `GET /orientation/<project>?role=qa` add a `role_block` field.
+
+### New REST endpoints
+
+| Endpoint | What it does |
+|---|---|
+| `POST /curate/run` | Dreaming pass (`{"dry_run": true}` to preview) |
+| `GET /curate/run/status` | Last dreaming report, or `?run_id=N` |
+| `POST /curate/undo` | Revert a run: `{"run_id": N}` |
+| `GET /fact/:id` | A fact with its freshness and change history |
+| `POST /fact/:id/verify` / `retire` / `restore` / `dispute` | Review a fact (`dispute` takes `note`, `correction`) |
+| `GET /pages`, `GET /page/:slug`, `POST /page` | Entity pages |
 
 ---
 

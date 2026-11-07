@@ -1,6 +1,8 @@
 node_modules/
 data/
 .env
+.env.*
+!.env.example
 *.log
 .DS_Store
 package-lock 2.json

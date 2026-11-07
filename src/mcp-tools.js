@@ -4,12 +4,17 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { sanitizeFields, neutralize, DATA_NOTICE, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, PROJECT_NAME_MAX, PROJECT_NAME_RE } from './sanitize.js';
+import { verifyFact, disputeFact, setFactStatus, restoreFact, getPage, listPages, upsertPage, PAGE_FIELDS, PAGE_KINDS } from './db.js';
 import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
 import db from './db.js';
 import { parseTimeRange, inRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { indexSession, indexFact } from './indexer.js';
 import { runCuration } from './curator.js';
+import { runDream, formatDreamReport } from './dreaming.js';
+import { freshnessMarker } from './freshness.js';
+import { buildRoleBlock, ROLES } from './roles.js';
+import { renderPage, renderPageList } from './pages.js';
 import * as cloud from './cloud-client.js';
 import { CloudUnavailableError } from './cloud-client.js';
 import { syncPending, dumpToGist } from './gist-client.js';
@@ -107,7 +112,7 @@ function syncFactInBackground(args, localId) {
   });
 }
 
-const WRITE_TOOLS = new Set(['dump_session', 'add_fact', 'edit_session', 'update_project_intelligence']);
+const WRITE_TOOLS = new Set(['dump_session', 'add_fact', 'edit_session', 'update_project_intelligence', 'update_page', 'review_fact', 'send_feedback']);
 
 // Says only what is known about the local write when a tool fails.
 function failureNote(toolName, wrote) {
@@ -158,6 +163,7 @@ function withTimeout(toolName, handlerFn) {
 // Project names become card filenames: no path separators, no "..".
 const projectName = z.string().min(1).max(PROJECT_NAME_MAX).regex(PROJECT_NAME_RE, 'no path separators or ".."');
 const resultLimit = (fallback, max) => z.number().int().min(1).max(max).optional().default(fallback);
+const roleParam = z.enum(ROLES).optional().describe('Return a ~30 line block for this role');
 
 // Everything the read tools return is recalled memory, some of it from the
 // cloud, so it is escaped the same way the cards are and labelled as data.
@@ -281,8 +287,10 @@ function registerTools(server) {
     {
       surface: z.enum(['claude-code', 'copilot', 'codex', 'hermes', 'cursor', 'generic']).optional()
         .describe('Which AI surface is calling — shapes the response format and depth'),
+      role: roleParam,
     },
-    withTimeout('get_context', async ({ surface } = {}) => {
+    withTimeout('get_context', async ({ surface, role } = {}) => {
+      if (role) return memoryResult(buildRoleBlock(role));
       const { data: context, source } = await readMemory({
         local: () => ({
           recent_sessions: getRecentSessions(5),
@@ -328,7 +336,7 @@ function registerTools(server) {
         if (globalFacts.length > 0) {
           lines.push('**Global Facts & Preferences:**');
           for (const f of globalFacts.slice(0, 10)) {
-            lines.push(`${f.category}: ${f.content}`);
+            lines.push(`${f.category}: ${f.content}${freshnessMarker(f)}`);
           }
         }
       }
@@ -385,9 +393,18 @@ function registerTools(server) {
     "Start here for project work: stack, gotchas, last 3 sessions, open tasks, under 2000 tokens.",
     {
       project: projectName.describe('Project name to get a focused orientation brief for'),
+      role: roleParam,
     },
-    withTimeout('get_orientation', async ({ project }) => {
+    withTimeout('get_orientation', async ({ project, role }) => {
       const intel = getProjectIntelligence(project);
+      if (role) {
+        const head = [];
+        if (intel?.stack) head.push(`Stack: ${intel.stack.replace(/\s+/g, ' ').slice(0, 160)}`);
+        if (intel?.deployment) head.push(`Deployment: ${intel.deployment.replace(/\s+/g, ' ').slice(0, 160)}`);
+        const open = latestNextSteps(project);
+        if (open) head.push(`Open: ${open.replace(/\s+/g, ' ').slice(0, 200)}`);
+        return memoryResult([...buildRoleBlock(role, { project, maxLines: 30 - head.length }), ...(head.length ? ['', ...head] : [])]);
+      }
       const sessions = getRecentSessionsForProject(project, 3);
       const nextSteps = latestNextSteps(project);
       const globalFacts = getAllFacts().filter(f => !f.project_id).slice(0, 8);
@@ -426,7 +443,7 @@ function registerTools(server) {
 
       if (globalFacts.length > 0) {
         lines.push('## Global Preferences');
-        for (const f of globalFacts) lines.push(`${f.category}: ${f.content}`);
+        for (const f of globalFacts) lines.push(`${f.category}: ${f.content}${freshnessMarker(f)}`);
       }
 
       return memoryResult(lines);
@@ -489,8 +506,8 @@ function registerTools(server) {
         lines.push('## Facts\n');
         for (const f of results.facts) {
           const proj = f.project_name ? `[${f.project_name}]` : '[global]';
-          lines.push(`**${proj} — ${f.category}**`);
-          lines.push(f.content);
+          lines.push(`**${proj} — ${f.category}**${f.id != null ? ` (#${f.id})` : ''}`);
+          lines.push(`${f.content}${freshnessMarker(f)}`);
           lines.push('');
         }
       }
@@ -578,7 +595,10 @@ function registerTools(server) {
       category: z.string().describe('Category e.g. "preference", "pattern", "lesson" (a fixed mistake, shown first on cards, never auto-archived), "tour" (a code tour: one feature traced through 5-6 files with function names, checks and change boundary, shown on the project card), "stack-choice"'),
       content: z.string().describe('The fact or insight to remember'),
       project: projectName.optional().describe('Associate with a project, or leave blank for global facts'),
-      tags: z.string().optional().describe('Comma-separated tags'),
+      tags: z.string().optional().describe('Comma-separated; "role:qa" adds it to that role block'),
+      source: z.string().max(200).optional().describe('Where it came from'),
+      volatility: z.enum(['stable', 'volatile']).optional().describe('volatile (contact, price, URL, deploy) goes stale after ttl_days; inferred if omitted'),
+      ttl_days: z.number().int().min(1).max(3650).optional().describe('Default 30'),
     },
     withTimeout('add_fact', async (args, ctx) => {
       const id = addFact(args);
@@ -645,7 +665,7 @@ function registerTools(server) {
         if (record.what_was_built) lines.push(`Built: ${record.what_was_built}`);
         if (record.next_steps) lines.push(`Next: ${record.next_steps}`);
       } else {
-        lines.push(`${record.category}: ${record.content}`);
+        lines.push(`${record.category}: ${record.content}${freshnessMarker(record)}`);
       }
       lines.push('');
       shown++;
@@ -678,7 +698,7 @@ function registerTools(server) {
         for (const f of exact.facts) {
           seen.add(`fact:${f.id}`);
           lines.push(`**[${f.project_name ?? 'global'}]** ${String(f.created_at).split('T')[0]} (exact)`);
-          lines.push(`${f.category}: ${f.content}`);
+          lines.push(`${f.category}: ${f.content}${freshnessMarker(f)}`);
           lines.push('');
         }
         let remaining = limit - exact.sessions.length - exact.facts.length;
@@ -697,7 +717,7 @@ function registerTools(server) {
             const when = String(m.rowtype === 'session' ? rec.session_date : rec.created_at);
             if (!inRange(when, range)) continue;
             lines.push(`**[${rec.project_name ?? 'global'}]** ${when.split('T')[0]} (score: ${m.score.toFixed(2)})`);
-            lines.push(m.rowtype === 'session' ? rec.summary : `${rec.category}: ${rec.content}`);
+            lines.push(m.rowtype === 'session' ? rec.summary : `${rec.category}: ${rec.content}${freshnessMarker(rec)}`);
             lines.push('');
             remaining--;
           }
@@ -796,16 +816,31 @@ function registerTools(server) {
       message: z.string().describe('Your feedback, bug report, or feature request'),
       type: z.enum(['bug', 'feature', 'general']).optional().describe('Type of feedback'),
       context: z.string().optional().describe('Any extra context — what you were doing, what you expected'),
+      fact_id: z.number().int().optional().describe('Fact that was wrong: marks it disputed'),
+      correction: z.string().optional().describe('Replacement text'),
     },
-    withTimeout('send_feedback', async (args) => {
+    withTimeout('send_feedback', async ({ fact_id, correction, ...args }, ctx) => {
+      // Disputing a fact is local and works without the cloud; the message
+      // itself still goes to the maintainer as before.
+      let disputed = '';
+      if (fact_id != null) {
+        const fact = getFactById(fact_id);
+        if (!fact) return { content: [{ type: 'text', text: `Fact ${fact_id} not found. Nothing was changed or sent.` }] };
+        disputeFact(fact_id, { note: args.message, correction });
+        ctx.wrote = `dispute on local fact ${fact_id}`;
+        logAudit('send_feedback', `fact ${fact_id} marked disputed`);
+        disputed = `Fact #${fact_id} marked disputed${correction ? ' with a correction' : ''}; the next dreaming pass ${correction ? 'replaces it' : 'lists it for re-check'}. `;
+        args = { ...args, context: [args.context, `fact_id: ${fact_id}`].filter(Boolean).join('\n') };
+      }
       if (!cloud.isEnabled()) {
+        if (disputed) return { content: [{ type: 'text', text: `${disputed}Cloud not configured, so the message was not sent to the maintainer.` }] };
         return { content: [{ type: 'text', text: 'Cloud not configured — feedback could not be sent.' }] };
       }
       try {
         await cloud.postFeedback(args);
-        return { content: [{ type: 'text', text: 'Feedback sent to Danny. Thank you!' }] };
+        return { content: [{ type: 'text', text: `${disputed}Feedback sent to Danny. Thank you!` }] };
       } catch {
-        return { content: [{ type: 'text', text: 'Could not reach cloud — feedback not sent.' }] };
+        return { content: [{ type: 'text', text: `${disputed}Could not reach cloud — feedback not sent.` }] };
       }
     })
   );
@@ -813,11 +848,17 @@ function registerTools(server) {
   // ─── TOOL: curate_memory ─────────────────────────────────────────────────────
   server.tool(
     'curate_memory',
-    "Find and archive near-duplicate facts (recoverable). Runs daily on its own; call with dry_run to preview.",
+    "Archive near-duplicate facts (recoverable). mode full = dreaming pass: disputed, duplicates, lessons, contradictions, re-check list, pages. dry_run previews.",
     {
       dry_run: z.boolean().optional().default(false).describe('Preview what would be archived without changing anything'),
+      mode: z.enum(['duplicates', 'full']).optional().default('duplicates'),
     },
-    withTimeout('curate_memory', async ({ dry_run }, ctx) => {
+    withTimeout('curate_memory', async ({ dry_run, mode }, ctx) => {
+      if (mode === 'full') {
+        const r = await runDream({ apply: !dry_run, signal: ctx.signal, budgetMs: TOOL_TIMEOUT_MS - 4_000 });
+        logAudit('curate_memory', `dream run ${r.run_id}${dry_run ? ' (dry run)' : ''}`);
+        return memoryResult(formatDreamReport(r));
+      }
       // Leave headroom under the tool timeout so the report gets back; facts not
       // indexed in time are picked up by the next run.
       const report = await runCuration({ apply: !dry_run, signal: ctx.signal, budgetMs: TOOL_TIMEOUT_MS - 4_000 });
@@ -854,6 +895,82 @@ function registerTools(server) {
       }
 
       return memoryResult(lines);
+    })
+  );
+
+  // ─── TOOL: review_fact ───────────────────────────────────────────────────────
+  server.tool(
+    'review_fact',
+    "After re-checking a fact: verify (still true), retire (no longer true, recoverable) or restore.",
+    {
+      id: z.number().int().describe('Fact #id'),
+      action: z.enum(['verify', 'retire', 'restore']),
+      note: z.string().optional(),
+    },
+    withTimeout('review_fact', async ({ id, action, note }, ctx) => {
+      const fact = getFactById(id);
+      if (!fact) return { content: [{ type: 'text', text: `Fact ${id} not found.` }] };
+      let res;
+      if (action === 'verify') {
+        if (fact.status !== 'active') return { content: [{ type: 'text', text: `Fact ${id} is ${fact.status}; restore it first.` }] };
+        res = verifyFact(id, { note });
+      } else if (action === 'retire') {
+        res = setFactStatus(id, 'retired', { note });
+        if (!res) return { content: [{ type: 'text', text: `Fact ${id} is already ${fact.status}.` }] };
+      } else {
+        res = restoreFact(id, { note });
+      }
+      ctx.wrote = `${action} on local fact ${id}`;
+      logAudit('review_fact', `${action} fact ${id}`);
+      setImmediate(() => {
+        try { if (fact.project_name) writeSidecarForProject(fact.project_name); } catch {}
+        try { writeGlobalContext(); } catch {}
+      });
+      const done = { verify: 'verified - fresh again, dispute cleared', retire: 'retired (hidden; review_fact restore brings it back)', restore: 'restored to active' }[action];
+      return { content: [{ type: 'text', text: `Fact #${id} ${done}. Status: ${res.status}.` }] };
+    })
+  );
+
+  // ─── TOOL: get_page ──────────────────────────────────────────────────────────
+  server.tool(
+    'get_page',
+    "Linked client/product page: repo, hosting, database, live, open issues, last decision, links. No slug lists pages.",
+    {
+      slug: z.string().optional().describe('e.g. "surf-rides"'),
+      kind: z.enum(PAGE_KINDS).optional(),
+    },
+    withTimeout('get_page', async ({ slug, kind }) => {
+      if (!slug) return memoryResult(renderPageList(listPages({ kind })));
+      const page = getPage(slug);
+      if (!page) return { content: [{ type: 'text', text: `No page "${neutralize(slug).text}". List pages with get_page, or create it with update_page.` }] };
+      return memoryResult(renderPage(page));
+    })
+  );
+
+  // ─── TOOL: update_page ───────────────────────────────────────────────────────
+  server.tool(
+    'update_page',
+    "Create or update a client/product page. Only fields passed change; null clears one.",
+    {
+      slug: z.string().min(1).describe('Slug or title'),
+      kind: z.enum(PAGE_KINDS).optional().describe('Needed for a new page'),
+      title: z.string().optional(),
+      project: projectName.optional(),
+      fields: z.record(z.string(), z.string().nullable()).optional().describe(`${PAGE_FIELDS.join(", ")}`),
+      notes: z.string().optional(),
+      links: z.array(z.string()).optional().describe('Page slugs'),
+      unlink: z.array(z.string()).optional(),
+    },
+    withTimeout('update_page', async (args, ctx) => {
+      let page;
+      try {
+        page = upsertPage({ ...args, source: 'manual' });
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Page not saved: ${err.message}` }] };
+      }
+      ctx.wrote = `page ${page.slug}`;
+      logAudit('update_page', `page ${page.slug}`);
+      return memoryResult([`Page saved.`, '', ...renderPage(page)]);
     })
   );
 
@@ -905,7 +1022,7 @@ function registerTools(server) {
 export function createServer() {
   const server = new McpServer({
     name: 'what-next',
-    version: '2.4.0',
+    version: '2.5.0',
   });
   registerTools(server);
   return server;

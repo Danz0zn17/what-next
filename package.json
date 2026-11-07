@@ -1,6 +1,6 @@
 {
   "name": "whatnext-ai",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "What Next — AI-powered continuity engine. Your second brain that always knows what happened and what comes next.",
   "license": "MIT",
   "type": "module",
@@ -25,7 +25,9 @@
     "chatgpt:scrape": "node src/scrape-chatgpt.js --scrape",
     "chatgpt:preview": "node src/scrape-chatgpt.js --scrape --dry-run",
     "backfill": "node src/backfill-embeddings.js",
-    "postinstall": "node --input-type=commonjs -e \"const fs=require('fs'),os=require('os'),p='node_modules/onnxruntime-node/bin/napi-v3/'+os.platform()+'/'+os.arch()+'/onnxruntime_binding.node';if(!fs.existsSync(p)){console.error('FATAL: onnxruntime native binding missing at',p,'\\nRun: npm install --force');process.exit(1);}console.log('OK: onnxruntime binding present (',p,')');\""
+    "dream": "node src/dream-cli.js",
+    "dream:dry": "node src/dream-cli.js --dry-run",
+    "postinstall": "node bin/check-onnx.cjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",

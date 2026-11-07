@@ -82,7 +82,7 @@
   <p>We collect this data solely to provide the What Next service: giving your AI tools persistent memory of your work. We do not sell this data, share it with third parties, or use it for advertising.</p>
 
   <h2>3. Where Your Data Lives</h2>
-  <p>By default, all data is stored locally on your machine in a SQLite database at <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/whatnext.db</code> and as markdown files at <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/agents/</code>.</p>
+  <p>By default, all data is stored locally on your machine in a SQLite database at <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/data/</code> and as markdown files at <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">~/.whatnext/agents/</code>.</p>
   <p>If you provide an API key, your session data syncs to a cloud Postgres database hosted on Railway in the EU/US. You control this by setting or removing the <code style="background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">WHATNEXT_API_KEY</code> environment variable. Removing it stops all cloud sync.</p>
   <p>Your project code, file contents, secrets, and credentials are never stored or transmitted by What Next.</p>
 
@@ -91,7 +91,7 @@
   <ul>
     <li>We only collect data that is necessary to deliver the service.</li>
     <li>Your email address (if provided for beta access) is used only to contact you about your beta access and product updates.</li>
-    <li>We do not transfer personal data outside South Africa except to services we use to operate What Next (Railway for cloud hosting). These providers are contractually bound to appropriate data protection standards.</li>
+    <li>We do not transfer personal data outside South Africa except to services we use to operate What Next (Netlify for the website and sign-up form, Railway for cloud sync, PostHog for page view counts and Sentry for error reports). Our <a href="/privacy">Privacy Policy</a> sets out what each one receives.</li>
     <li>You have the right to access, correct, or request deletion of any personal data we hold about you. Contact us at <a href="mailto:hello@greenberries.co.za">hello@greenberries.co.za</a> to exercise these rights.</li>
   </ul>
 
@@ -138,8 +138,8 @@
 </main>
 
 <footer>
-  &copy; 2026 What Next &nbsp;&middot;&nbsp; <a href="/">Back to home</a> &nbsp;&middot;&nbsp;
-  Built by <a href="https://greenberries.co.za" target="_blank" rel="noopener">Greenberries</a>
+  &copy; 2026 What Next &nbsp;&middot;&nbsp; <a href="/">Back to home</a> &nbsp;&middot;&nbsp; <a href="/privacy">Privacy</a> &nbsp;&middot;&nbsp;
+  <a href="https://greenberries.co.za" target="_blank" rel="noopener">Built by Greenberries</a>
 </footer>
 
 </body>

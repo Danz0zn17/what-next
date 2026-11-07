@@ -15,7 +15,7 @@
  *   >= REVIEW_THRESHOLD        flag the pair for review, change nothing
  */
 
-import { getActiveFacts, getFactEmbeddings, archiveFact, storeEmbedding, recordCurationRun } from './db.js';
+import { getActiveFacts, getFactEmbeddings, archiveFact, storeEmbedding, startCurationRun, finishCurationRun } from './db.js';
 import { writeGlobalContext, writeSidecarForProject } from './sidecar.js';
 
 const AUTO_ARCHIVE_THRESHOLD = 0.95;
@@ -115,8 +115,12 @@ export function findDuplicatePairs(facts, embeddingById, {
 // indexed or archived once it fires, and the report says so. `budgetMs` caps
 // the embedding backfill so a caller with a deadline still gets a report;
 // facts left unindexed are picked up by the next run.
-export async function runCuration({ apply = true, signal, budgetMs } = {}) {
+// `runId`: the dreaming pass runs curation inside its own run, so archives are
+// journalled under that run and no separate curation run is recorded.
+export async function runCuration({ apply = true, signal, budgetMs, runId = null } = {}) {
   const start = Date.now();
+  const ownRun = runId == null;
+  const id = ownRun ? startCurationRun({ dry_run: !apply, kind: 'curate' }) : runId;
   const overBudget = () => budgetMs != null && Date.now() - start >= budgetMs;
   const stopped = () => signal?.aborted === true;
   const facts = getActiveFacts();
@@ -149,7 +153,7 @@ export async function runCuration({ apply = true, signal, budgetMs } = {}) {
   if (apply) {
     for (const pair of auto) {
       if (stopped()) break;
-      archiveFact(pair.archived_id, pair.kept_id);
+      if (!archiveFact(pair.archived_id, pair.kept_id, { runId: id })) continue;
       applied.push(pair);
       if (pair.project) touchedProjects.add(pair.project);
     }
@@ -157,6 +161,7 @@ export async function runCuration({ apply = true, signal, budgetMs } = {}) {
   const archived = apply ? applied : auto;
 
   const report = {
+    run_id: id,
     ran_at: new Date().toISOString(),
     dry_run: !apply,
     aborted: stopped(),
@@ -166,13 +171,14 @@ export async function runCuration({ apply = true, signal, budgetMs } = {}) {
     flagged_for_review: review,
     duration_ms: Date.now() - start,
   };
-  recordCurationRun({
-    dry_run: !apply,
-    facts_scanned: facts.length,
-    auto_archived: archived.length,
-    flagged: review.length,
-    report,
-  });
+  if (ownRun) {
+    finishCurationRun(id, {
+      facts_scanned: facts.length,
+      auto_archived: archived.length,
+      flagged: review.length,
+      report,
+    });
+  }
 
   // Archived facts change what context cards show — refresh them
   if (apply && archived.length > 0) {
@@ -194,7 +200,13 @@ export function startPeriodicCuration() {
     process.stderr.write('[curator] disabled via WHATNEXT_CURATOR=0\n');
     return;
   }
+  // WHATNEXT_DREAM=1 makes the daily run the full dreaming pass (src/dreaming.js),
+  // which includes this curation. Off by default so existing installs keep the
+  // duplicates-only run.
+  const run = process.env.WHATNEXT_DREAM === '1'
+    ? () => import('./dreaming.js').then(m => m.runDream()).catch(() => {})
+    : () => runCuration().catch(() => {});
   // First run 60s after boot (let embeddings/native deps settle), then daily
-  setTimeout(() => runCuration().catch(() => {}), 60_000);
-  setInterval(() => runCuration().catch(() => {}), RUN_INTERVAL_MS);
+  setTimeout(run, 60_000);
+  setInterval(run, RUN_INTERVAL_MS);
 }

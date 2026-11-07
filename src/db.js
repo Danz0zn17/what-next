@@ -4,6 +4,7 @@ import { mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { sanitizeFields, flagsToColumn, detectFlags, neutralize, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, INTEL_TEXT_FIELDS } from './sanitize.js';
 import { sqlDate } from './timeparse.js';
+import { normaliseVolatility, normaliseTtl } from './freshness.js';
 
 const DATA_DIR = process.env.WHATNEXT_DATA_DIR || join(homedir(), '.whatnext', 'data');
 const DB_PATH = join(DATA_DIR, 'what-next.db');
@@ -213,6 +214,72 @@ db.exec(`
   );
 `);
 
+// Migration (v2.5.0): fact freshness, feedback and the dreaming pass. All
+// additive: new nullable columns and new tables. Old rows read as before, with
+// source 'unverified' (backfilled once below) and no last_verified_at.
+//   source            where the fact came from (mcp, api, session:<id>, feedback:<id>, unverified)
+//   last_verified_at  when someone last confirmed it is still true
+//   volatility        stable | volatile; NULL = inferred from category/content (freshness.js)
+//   ttl_days          days a volatile fact stays fresh after a check (default 30)
+//   disputed_at / dispute_note / dispute_correction - set by send_feedback with a fact_id
+// facts.status gains 'superseded' and 'retired' next to 'active' and 'archived';
+// anything not 'active' is hidden from reads and can be restored.
+try { db.exec('ALTER TABLE facts ADD COLUMN source TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN last_verified_at TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN volatility TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN ttl_days INTEGER'); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN disputed_at TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN dispute_note TEXT'); } catch {}
+try { db.exec('ALTER TABLE facts ADD COLUMN dispute_correction TEXT'); } catch {}
+try { db.exec("ALTER TABLE curation_runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'curate'"); } catch {}
+db.exec(`
+  -- Journal of every status change the curator, the dreaming pass or a review
+  -- makes to a fact. before/after hold the mutable columns as JSON, so a single
+  -- change or a whole run can be reverted. Nothing is ever deleted.
+  CREATE TABLE IF NOT EXISTS memory_changes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     INTEGER,
+    fact_id    INTEGER NOT NULL,
+    action     TEXT NOT NULL,
+    before     TEXT,
+    after      TEXT,
+    note       TEXT,
+    undone_at  TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_memory_changes_run  ON memory_changes(run_id);
+  CREATE INDEX IF NOT EXISTS idx_memory_changes_fact ON memory_changes(fact_id);
+
+  -- One linked page per client and per product. fields is JSON
+  -- { name: { value, source, updated_at } }; source 'manual' is never
+  -- overwritten by seeding. links is a JSON array of other page slugs.
+  CREATE TABLE IF NOT EXISTS entity_pages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug            TEXT NOT NULL UNIQUE,
+    kind            TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    project_id      INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    fields          TEXT NOT NULL DEFAULT '{}',
+    notes           TEXT,
+    links           TEXT NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'active',
+    injection_flags TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+try {
+  const done = db.prepare("SELECT value FROM sync_state WHERE key = 'fact_source_backfill_v1'").get();
+  if (!done) {
+    db.transaction(() => {
+      db.prepare("UPDATE facts SET source = 'unverified' WHERE source IS NULL").run();
+      db.prepare("INSERT OR REPLACE INTO sync_state (key, value) VALUES ('fact_source_backfill_v1', ?)").run(new Date().toISOString());
+    })();
+  }
+} catch {
+  // best-effort: never block startup on the backfill
+}
+
 // --- Project helpers ---
 export function upsertProject(name, description = null) {
   const existing = db.prepare('SELECT id FROM projects WHERE name = ?').get(name);
@@ -267,13 +334,128 @@ export function addSession({ project, summary, what_was_built, decisions, stack,
 }
 
 // --- Fact helpers ---
-export function addFact({ project, category, content, tags }) {
+// A fact written now counts as checked now. source defaults to 'mcp'; the REST
+// API, sync and the dreaming pass pass their own.
+export function addFact({ project, category, content, tags, source, volatility, ttl_days }) {
   const projectId = project ? upsertProject(project) : null;
   const { values: v, flags } = sanitizeFields({ category, content, tags }, FACT_TEXT_FIELDS);
   const result = db.prepare(`
-    INSERT INTO facts (project_id, category, content, tags, injection_flags) VALUES (?, ?, ?, ?, ?)
-  `).run(projectId, v.category, v.content, v.tags ?? null, flagsToColumn(flags));
+    INSERT INTO facts (project_id, category, content, tags, injection_flags, source, last_verified_at, volatility, ttl_days)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, v.category, v.content, v.tags ?? null, flagsToColumn(flags),
+    cleanSource(source) ?? 'mcp', new Date().toISOString(), normaliseVolatility(volatility), normaliseTtl(ttl_days));
   return result.lastInsertRowid;
+}
+
+function cleanSource(source) {
+  if (source == null) return null;
+  const s = neutralize(String(source)).text.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200);
+  return s || null;
+}
+
+// --- Fact freshness, feedback and review (v2.5.0) ---
+const FACT_STATE_COLS = ['status', 'superseded_by', 'last_verified_at', 'disputed_at', 'dispute_note', 'dispute_correction'];
+export const FACT_STATUSES = ['active', 'archived', 'superseded', 'retired'];
+
+function factState(id) {
+  const cols = FACT_STATE_COLS.join(', ');
+  return db.prepare(`SELECT ${cols} FROM facts WHERE id = ?`).get(id) ?? null;
+}
+
+function journal(runId, factId, action, before, after, note = null) {
+  db.prepare(`
+    INSERT INTO memory_changes (run_id, fact_id, action, before, after, note) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(runId ?? null, factId, action, before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null,
+    note == null ? null : String(note).slice(0, 500));
+}
+
+// Applies `changes` to a fact's state columns and journals before/after.
+// Returns the new state, or null when the fact does not exist.
+function changeFact(id, changes, { runId = null, action, note = null } = {}) {
+  return db.transaction(() => {
+    const before = factState(id);
+    if (!before) return null;
+    const keys = Object.keys(changes).filter(k => FACT_STATE_COLS.includes(k));
+    if (keys.length === 0) return before;
+    db.prepare(`UPDATE facts SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...keys.map(k => changes[k] ?? null), id);
+    const after = factState(id);
+    journal(runId, id, action, before, after, note);
+    if (before.status === 'active' && after.status !== 'active') {
+      db.prepare("DELETE FROM embeddings WHERE rowtype = 'fact' AND row_id = ?").run(id);
+    }
+    return after;
+  })();
+}
+
+// Someone confirmed the fact is still true: it is fresh again and any dispute is cleared.
+export function verifyFact(id, { runId = null, note = null } = {}) {
+  return changeFact(id, { last_verified_at: new Date().toISOString(), disputed_at: null, dispute_note: null, dispute_correction: null },
+    { runId, action: 'verify', note });
+}
+
+export function disputeFact(id, { note = null, correction = null, runId = null } = {}) {
+  const clean = (s, n) => (s == null || s === '' ? null : neutralize(String(s)).text.slice(0, n));
+  return changeFact(id, { disputed_at: new Date().toISOString(), dispute_note: clean(note, 1000), dispute_correction: clean(correction, 4000) },
+    { runId, action: 'dispute', note });
+}
+
+// status: superseded (replaced by supersededBy) | retired (no longer true) | archived.
+export function setFactStatus(id, status, { supersededBy = null, runId = null, note = null } = {}) {
+  if (!FACT_STATUSES.includes(status) || status === 'active') throw new Error(`setFactStatus: bad status ${status}`);
+  const cur = factState(id);
+  if (!cur || cur.status !== 'active') return null;
+  return changeFact(id, { status, superseded_by: supersededBy }, { runId, action: status, note });
+}
+
+export function restoreFact(id, { runId = null, note = null } = {}) {
+  const cur = factState(id);
+  if (!cur) return null;
+  if (cur.status === 'active') return cur;
+  return changeFact(id, { status: 'active', superseded_by: null }, { runId, action: 'restore', note });
+}
+
+// A fact created by a run (promoted lesson, applied correction) is journalled
+// so undoing the run retires it.
+export function journalCreatedFact(runId, factId, note) {
+  journal(runId, factId, 'create', null, factState(factId), note);
+}
+
+export function getDisputedFacts(limit = 100) {
+  return db.prepare(`
+    SELECT f.*, p.name AS project_name FROM facts f LEFT JOIN projects p ON p.id = f.project_id
+    WHERE f.status = 'active' AND f.disputed_at IS NOT NULL ORDER BY f.disputed_at ASC LIMIT ?
+  `).all(limit);
+}
+
+export function getFactChanges(factId) {
+  return db.prepare('SELECT * FROM memory_changes WHERE fact_id = ? ORDER BY id ASC').all(factId)
+    .map(r => ({ ...r, before: r.before ? JSON.parse(r.before) : null, after: r.after ? JSON.parse(r.after) : null }));
+}
+
+// Reverts every change a run made, newest first. Created facts are retired,
+// not deleted. A change is skipped when the fact moved on since (its state no
+// longer matches what the run left), so a later human decision is not undone.
+export function undoRun(runId) {
+  return db.transaction(() => {
+    const changes = db.prepare('SELECT * FROM memory_changes WHERE run_id = ? AND undone_at IS NULL ORDER BY id DESC').all(runId);
+    let reverted = 0, skipped = 0;
+    for (const c of changes) {
+      const now = factState(c.fact_id);
+      const after = c.after ? JSON.parse(c.after) : null;
+      if (!now || (after && JSON.stringify(now) !== JSON.stringify(after))) { skipped++; continue; }
+      const target = c.action === 'create' ? { ...now, status: 'retired' } : JSON.parse(c.before);
+      db.prepare(`UPDATE facts SET ${FACT_STATE_COLS.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+        .run(...FACT_STATE_COLS.map(k => target[k] ?? null), c.fact_id);
+      if (now.status === 'active' && target.status !== 'active') {
+        db.prepare("DELETE FROM embeddings WHERE rowtype = 'fact' AND row_id = ?").run(c.fact_id);
+      }
+      journal(null, c.fact_id, 'undo', now, factState(c.fact_id), `undo of run ${runId} change ${c.id}`);
+      db.prepare("UPDATE memory_changes SET undone_at = datetime('now') WHERE id = ?").run(c.id);
+      reverted++;
+    }
+    return { run_id: runId, reverted, skipped };
+  })();
 }
 
 // --- Session editing ---
@@ -478,25 +660,40 @@ export function getFactEmbeddings() {
     .map(r => ({ row_id: r.row_id, embedding: JSON.parse(r.embedding) }));
 }
 
-export function archiveFact(id, supersededBy = null) {
-  const result = db.prepare(`
-    UPDATE facts SET status = 'archived', superseded_by = ? WHERE id = ? AND status = 'active'
-  `).run(supersededBy, id);
-  if (result.changes > 0) {
-    db.prepare(`DELETE FROM embeddings WHERE rowtype = 'fact' AND row_id = ?`).run(id);
-  }
-  return result.changes > 0;
+// Journalled (memory_changes) so a curation or dreaming run can be undone.
+export function archiveFact(id, supersededBy = null, { runId = null } = {}) {
+  return setFactStatus(id, 'archived', { supersededBy, runId, note: supersededBy ? `near-duplicate of #${supersededBy}` : null }) !== null;
 }
 
-export function recordCurationRun({ dry_run, facts_scanned, auto_archived, flagged, report }) {
-  db.prepare(`
-    INSERT INTO curation_runs (dry_run, facts_scanned, auto_archived, flagged, report)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(dry_run ? 1 : 0, facts_scanned, auto_archived, flagged, JSON.stringify(report));
+export function recordCurationRun({ dry_run, facts_scanned, auto_archived, flagged, report, kind = 'curate' }) {
+  const r = db.prepare(`
+    INSERT INTO curation_runs (dry_run, facts_scanned, auto_archived, flagged, report, kind)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(dry_run ? 1 : 0, facts_scanned, auto_archived, flagged, JSON.stringify(report), kind);
+  return Number(r.lastInsertRowid);
 }
 
-export function getLastCurationRun() {
-  const row = db.prepare('SELECT * FROM curation_runs ORDER BY id DESC LIMIT 1').get();
+// A run row is opened before any change so every journalled change carries
+// its run id; finishCurationRun fills in the counts and report.
+export function startCurationRun({ dry_run, kind = 'curate' }) {
+  return recordCurationRun({ dry_run, facts_scanned: 0, auto_archived: 0, flagged: 0, report: { status: 'running' }, kind });
+}
+
+export function finishCurationRun(id, { facts_scanned, auto_archived, flagged, report }) {
+  db.prepare('UPDATE curation_runs SET facts_scanned = ?, auto_archived = ?, flagged = ?, report = ? WHERE id = ?')
+    .run(facts_scanned, auto_archived, flagged, JSON.stringify(report), id);
+}
+
+// kind: 'curate' (duplicates only), 'dream' (full pass) or omitted for either.
+export function getLastCurationRun(kind = null) {
+  const row = kind
+    ? db.prepare('SELECT * FROM curation_runs WHERE kind = ? ORDER BY id DESC LIMIT 1').get(kind)
+    : db.prepare('SELECT * FROM curation_runs ORDER BY id DESC LIMIT 1').get();
+  return row ? { ...row, dry_run: row.dry_run === 1, report: JSON.parse(row.report) } : null;
+}
+
+export function getCurationRun(id) {
+  const row = db.prepare('SELECT * FROM curation_runs WHERE id = ?').get(id);
   return row ? { ...row, dry_run: row.dry_run === 1, report: JSON.parse(row.report) } : null;
 }
 
@@ -800,7 +997,7 @@ export function upsertSessionFromCloud({ cloud_id, project_name, summary, what_w
   return result.lastInsertRowid;
 }
 
-export function upsertFactFromCloud({ cloud_id, project_name, category, content, tags, created_at }) {
+export function upsertFactFromCloud({ cloud_id, project_name, category, content, tags, created_at, source, last_verified_at, volatility, ttl_days }) {
   if (!category || !content) return null;
   if (cloud_id) {
     const exists = db.prepare('SELECT id FROM facts WHERE cloud_id = ?').get(String(cloud_id));
@@ -817,9 +1014,11 @@ export function upsertFactFromCloud({ cloud_id, project_name, category, content,
     return null;
   }
   const result = db.prepare(`
-    INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id, injection_flags)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, v.category, v.content, v.tags ?? null, created_at ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null, flagsToColumn(flags));
+    INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id, injection_flags, source, last_verified_at, volatility, ttl_days)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(projectId, v.category, v.content, v.tags ?? null, created_at ?? new Date().toISOString(), cloud_id ? String(cloud_id) : null, flagsToColumn(flags),
+    cleanSource(source) ?? 'cloud', typeof last_verified_at === 'string' && last_verified_at ? last_verified_at.slice(0, 40) : null,
+    normaliseVolatility(volatility), normaliseTtl(ttl_days));
   return result.lastInsertRowid;
 }
 
@@ -883,6 +1082,146 @@ try {
   }
 } catch {
   // best-effort: never block startup on the backfill
+}
+
+// --- Entity pages (v2.5.0) ---
+// One page per client and per product, linked to each other. See src/pages.js
+// for seeding and rendering; this is storage only.
+export const PAGE_KINDS = ['client', 'product'];
+export const PAGE_FIELDS = ['summary', 'repo', 'hosting', 'database', 'url', 'live', 'stack', 'contact', 'open_issues', 'last_decision', 'status'];
+const PAGE_FIELD_MAX = 2000;
+
+export function slugify(value) {
+  return String(value ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);
+}
+
+function parsePage(row) {
+  if (!row) return null;
+  let fields = {}, links = [];
+  try { fields = JSON.parse(row.fields || '{}'); } catch {}
+  try { links = JSON.parse(row.links || '[]'); } catch {}
+  return { ...row, fields, links };
+}
+
+export function getPage(slugOrTitle) {
+  const slug = slugify(slugOrTitle);
+  const row = db.prepare(`
+    SELECT e.*, p.name AS project_name FROM entity_pages e LEFT JOIN projects p ON p.id = e.project_id
+    WHERE e.slug = ? OR lower(e.title) = lower(?) ORDER BY (e.slug = ?) DESC LIMIT 1
+  `).get(slug, String(slugOrTitle ?? ''), slug);
+  return parsePage(row);
+}
+
+export function listPages({ kind = null } = {}) {
+  const rows = kind
+    ? db.prepare("SELECT e.*, p.name AS project_name FROM entity_pages e LEFT JOIN projects p ON p.id = e.project_id WHERE e.status = 'active' AND e.kind = ? ORDER BY e.kind, e.title").all(kind)
+    : db.prepare("SELECT e.*, p.name AS project_name FROM entity_pages e LEFT JOIN projects p ON p.id = e.project_id WHERE e.status = 'active' ORDER BY e.kind, e.title").all();
+  return rows.map(parsePage);
+}
+
+// Pages that link to `slug`.
+export function getBacklinks(slug) {
+  return db.prepare(`
+    SELECT e.slug, e.title, e.kind FROM entity_pages e, json_each(e.links) l
+    WHERE l.value = ? AND e.status = 'active' ORDER BY e.title
+  `).all(slug);
+}
+
+/**
+ * Create or update a page. fields: { name: value } (null clears a field);
+ * source tags who set them ('manual' from tools/REST, 'seed' from seeding).
+ * Seeding (source 'seed') never overwrites a field a person or agent set.
+ * links: slugs to add; unlink: slugs to remove. Returns the page.
+ * meta (seeding only): { name: { fact_id, checked_at } } - the fact a field was
+ * copied from and when that fact was last checked, so a page never shows an
+ * old value as freshly checked (pages.js pageFieldState).
+ */
+export function upsertPage({ slug, kind, title, project, fields = {}, notes, links = [], unlink = [], source = 'manual', meta = {} }) {
+  const s = slugify(slug || title);
+  if (!s) throw new Error('page needs a slug or title');
+  return db.transaction(() => {
+    const existing = parsePage(db.prepare('SELECT * FROM entity_pages WHERE slug = ?').get(s));
+    if (kind != null && !PAGE_KINDS.includes(kind)) throw new Error(`kind must be ${PAGE_KINDS.join(' or ')}`);
+    if (!existing && !PAGE_KINDS.includes(kind)) throw new Error(`new page needs kind: ${PAGE_KINDS.join(' or ')}`);
+    const now = new Date().toISOString();
+    const merged = { ...(existing?.fields ?? {}) };
+    let changed = !existing;
+    for (const [name, raw] of Object.entries(fields ?? {})) {
+      if (!PAGE_FIELDS.includes(name) || raw === undefined) continue;
+      const prev = merged[name];
+      if (source === 'seed' && prev && prev.source !== 'seed') continue;
+      if (raw === null || raw === '') {
+        if (prev && !(source === 'seed' && prev.source !== 'seed')) { delete merged[name]; changed = true; }
+        continue;
+      }
+      const value = neutralize(String(raw)).text.slice(0, PAGE_FIELD_MAX);
+      const m = source === 'seed' ? meta?.[name] ?? {} : {};
+      const factId = Number.isInteger(m.fact_id) ? m.fact_id : null;
+      const checkedAt = typeof m.checked_at === 'string' && m.checked_at ? m.checked_at : null;
+      if (prev?.value === value && (prev.fact_id ?? null) === factId && (prev.checked_at ?? null) === checkedAt) continue;
+      merged[name] = { value, source, updated_at: now };
+      if (factId != null) merged[name].fact_id = factId;
+      if (checkedAt) merged[name].checked_at = checkedAt;
+      changed = true;
+    }
+    const linkSet = new Set(existing?.links ?? []);
+    for (const l of links ?? []) { const ls = slugify(l); if (ls && ls !== s && !linkSet.has(ls)) { linkSet.add(ls); changed = true; } }
+    for (const l of unlink ?? []) { if (linkSet.delete(slugify(l))) changed = true; }
+    let cleanNotes = existing?.notes ?? null;
+    if (notes !== undefined && !(source === 'seed' && existing?.notes)) {
+      cleanNotes = notes === null || notes === '' ? null : neutralize(String(notes)).text.slice(0, 8000);
+      if (cleanNotes !== (existing?.notes ?? null)) changed = true;
+    }
+    const projectId = project ? upsertProject(project) : existing?.project_id ?? null;
+    if (projectId !== (existing?.project_id ?? null)) changed = true;
+    const rawTitle = title || (!existing ? slug : null);
+    const newTitle = rawTitle ? neutralize(String(rawTitle)).text.slice(0, 200) : existing.title;
+    if (existing && newTitle !== existing.title && source !== 'seed') changed = true;
+    if (!changed) return getPage(s);
+    const flags = flagsToColumn(sanitizeFields({ notes: cleanNotes ?? '', ...Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, v.value])) },
+      ['notes', ...Object.keys(merged)]).flags);
+    if (existing) {
+      db.prepare(`UPDATE entity_pages SET kind = ?, title = ?, project_id = ?, fields = ?, notes = ?, links = ?, injection_flags = ?, status = 'active', updated_at = ? WHERE id = ?`)
+        .run(kind ?? existing.kind, source === 'seed' ? existing.title : newTitle, projectId, JSON.stringify(merged), cleanNotes, JSON.stringify([...linkSet]), flags, now, existing.id);
+    } else {
+      db.prepare(`INSERT INTO entity_pages (slug, kind, title, project_id, fields, notes, links, injection_flags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(s, kind, newTitle, projectId, JSON.stringify(merged), cleanNotes, JSON.stringify([...linkSet]), flags, now, now);
+    }
+    return getPage(s);
+  })();
+}
+
+export function getProjectFacts(projectName, limit = 50) {
+  return db.prepare(`
+    SELECT f.*, p.name AS project_name FROM facts f JOIN projects p ON p.id = f.project_id
+    WHERE p.name = ? AND f.status = 'active' ORDER BY f.created_at DESC, f.id DESC LIMIT ?
+  `).all(projectName, limit);
+}
+
+export function getLatestSessionWith(projectName, field) {
+  if (!SESSION_TEXT_FIELDS.includes(field)) throw new Error(`bad field ${field}`);
+  return db.prepare(`
+    SELECT s.id, s.session_date, s.${field} AS value FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE p.name = ? AND s.${field} IS NOT NULL AND trim(s.${field}) != ''
+    ORDER BY ${sessionDateOrder('s')} DESC, s.id DESC LIMIT 1
+  `).get(projectName) ?? null;
+}
+
+// Sessions after a cursor (local id), oldest first, for the dreaming pass.
+export function getSessionsAfter(afterId, limit = 200) {
+  return db.prepare(`
+    SELECT s.*, p.name AS project_name FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE s.id > ? ORDER BY s.id ASC LIMIT ?
+  `).all(afterId, limit);
+}
+
+export function getSyncValue(key) {
+  return db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key)?.value ?? null;
+}
+
+export function setSyncValue(key, value) {
+  db.prepare('INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)').run(key, String(value));
 }
 
 export default db;
