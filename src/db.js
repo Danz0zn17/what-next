@@ -859,6 +859,20 @@ export function setFactCloudId(localId, cloudId) {
   db.prepare('UPDATE facts SET cloud_id = ? WHERE id = ? AND cloud_id IS NULL').run(String(cloudId), localId);
 }
 
+// The local row behind a cloud fact, whatever its status. Falls back to an
+// unsynced twin (same category and content, no cloud_id yet) so a fact retired
+// before its cloud id came back is still recognised.
+export function getLocalFactForCloud({ id, category, content } = {}) {
+  const sel = 'SELECT f.*, p.name as project_name FROM facts f LEFT JOIN projects p ON p.id = f.project_id';
+  if (id != null) {
+    const row = db.prepare(`${sel} WHERE f.cloud_id = ?`).get(String(id));
+    if (row) return row;
+  }
+  if (category == null || content == null) return null;
+  return db.prepare(`${sel} WHERE f.cloud_id IS NULL AND f.category = ? AND f.content = ? ORDER BY f.id DESC LIMIT 1`)
+    .get(String(category), String(content)) ?? null;
+}
+
 // The cloud's rejection of a local row (4xx). Persisted so it survives a
 // restart; editSession clears it.
 export function markSyncError(table, id, reason) {

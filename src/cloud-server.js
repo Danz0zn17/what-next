@@ -534,9 +534,10 @@ async function searchMemories(userId, q, limit = 10) {
   `, [userId, term, limit]).catch(() => ({ rows: [] }));
 
   const { rows: facts } = await pool.query(`
-    SELECT f.id, f.category, f.content, f.tags, f.created_at::TEXT AS created_at,
+    SELECT f.id, f.category, f.content, f.tags, p.name AS project_name, f.created_at::TEXT AS created_at,
            f.source, f.last_verified_at::TEXT AS last_verified_at, f.volatility, f.ttl_days
     FROM facts f
+    LEFT JOIN projects p ON p.id = f.project_id
     WHERE f.user_id = $1
       AND to_tsvector('english', COALESCE(f.category,'') || ' ' || COALESCE(f.content,'') || ' ' || COALESCE(f.tags,''))
           @@ to_tsquery('english', $2)
@@ -1000,7 +1001,11 @@ async function start() {
                    CASE e.rowtype
                      WHEN 'session' THEN (SELECT s.summary FROM sessions s WHERE s.id = e.row_id AND s.user_id = $1)
                      WHEN 'fact'    THEN (SELECT f.content FROM facts    f WHERE f.id = e.row_id AND f.user_id = $1)
-                   END AS text
+                   END AS text,
+                   CASE e.rowtype
+                     WHEN 'session' THEN (SELECT p.name FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = e.row_id AND s.user_id = $1)
+                     WHEN 'fact'    THEN (SELECT p.name FROM facts    f JOIN projects p ON p.id = f.project_id WHERE f.id = e.row_id AND f.user_id = $1)
+                   END AS project_name
             FROM embeddings e
             WHERE e.user_id = $1
             ORDER BY e.embedding <=> $3::vector

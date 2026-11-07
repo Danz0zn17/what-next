@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { sanitizeFields, neutralize, DATA_NOTICE, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, PROJECT_NAME_MAX, PROJECT_NAME_RE } from './sanitize.js';
 import { verifyFact, disputeFact, setFactStatus, restoreFact, getPage, listPages, upsertPage, PAGE_FIELDS, PAGE_KINDS } from './db.js';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId, getLocalFactForCloud } from './db.js';
 import db from './db.js';
 import { parseTimeRange, inRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
@@ -199,6 +199,23 @@ async function readMemory({ local, remote, isEmpty }) {
   return { data: local(), source: 'local' };
 }
 
+// The cloud keeps no review state: retire, restore, verify and dispute only
+// change the local row. So every cloud fact is read through its local row: a
+// retired or archived one is dropped, an active one is shown as the local row
+// (local id, dispute, last check), which is the id review_fact acts on. A cloud
+// fact with no local row yet keeps its content but loses its id, so a marker
+// never points review_fact at an unrelated local fact.
+function reconcileCloudFact(f) {
+  if (!f) return null;
+  const local = getLocalFactForCloud(f);
+  if (local) return local.status === 'active' ? { ...local, project_name: local.project_name ?? f.project_name ?? null } : null;
+  return { ...f, id: null, cloud_id: f.id ?? null };
+}
+
+function reconcileCloudFacts(facts) {
+  return (facts ?? []).map(reconcileCloudFact).filter(Boolean);
+}
+
 // ─── Startup: sync any pending gists to cloud ─────────────────────────────────
 if (cloud.isEnabled()) {
   cloud.isReachable().then(reachable => {
@@ -297,7 +314,10 @@ function registerTools(server) {
           facts: getAllFacts(),
           active_projects: listProjects(),
         }),
-        remote: () => cloud.getContext(),
+        remote: async () => {
+          const c = await cloud.getContext();
+          return c ? { ...c, facts: reconcileCloudFacts(c.facts) } : c;
+        },
         isEmpty: c => !c || (!c.recent_sessions?.length && !c.active_projects?.length),
       });
 
@@ -474,7 +494,10 @@ function registerTools(server) {
         const count = r => (r?.sessions?.length ?? 0) + (r?.facts?.length ?? 0);
         ({ data: results, source } = await readMemory({
           local: () => searchMemories(query, limit),
-          remote: () => cloud.search(query),
+          remote: async () => {
+            const r = await cloud.search(query);
+            return r ? { ...r, facts: reconcileCloudFacts(r.facts) } : r;
+          },
           isEmpty: r => count(r) === 0,
         }));
         results = { sessions: results?.sessions ?? [], facts: results?.facts ?? [] };
@@ -506,7 +529,8 @@ function registerTools(server) {
         lines.push('## Facts\n');
         for (const f of results.facts) {
           const proj = f.project_name ? `[${f.project_name}]` : '[global]';
-          lines.push(`**${proj} — ${f.category}**${f.id != null ? ` (#${f.id})` : ''}`);
+          const ref = f.id != null ? ` (#${f.id})` : f.cloud_id != null ? ` (cloud #${f.cloud_id}, not on this machine yet)` : '';
+          lines.push(`**${proj} — ${f.category}**${ref}`);
           lines.push(`${f.content}${freshnessMarker(f)}`);
           lines.push('');
         }
@@ -631,8 +655,18 @@ function registerTools(server) {
     const lines = [`Semantic search: "${query}" [cloud]\n`];
     for (const r of results ?? []) {
       if (r.score < 0.3) continue;
-      lines.push(`**[${r.rowtype}]** (score: ${Number(r.score).toFixed(2)})`);
-      lines.push(r.text ?? '');
+      let text = r.text ?? '';
+      let project = r.project_name ?? null;
+      if (r.rowtype === 'fact') {
+        const local = getLocalFactForCloud({ id: r.row_id });
+        if (local && local.status !== 'active') continue;
+        if (local) {
+          text = `${local.content}${freshnessMarker(local)}`;
+          project = local.project_name ?? project;
+        }
+      }
+      lines.push(`**[${r.rowtype}]**${project ? ` [${project}]` : ''} (score: ${Number(r.score).toFixed(2)})`);
+      lines.push(text);
       lines.push('');
     }
     return lines.length > 1 ? lines : null;

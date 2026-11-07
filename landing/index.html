@@ -132,6 +132,35 @@
     .nav-right { display: flex; align-items: center; gap: 24px; }
     .nav-link { font-size: 13px; color: var(--text-2); text-decoration: none; transition: color 0.15s; }
     .nav-link:hover { color: var(--text-1); }
+    /* MOBILE MENU: the section links live in a drawer under 800px */
+    .nav-toggle {
+      display: none; width: 36px; height: 36px; padding: 0;
+      background: transparent; border: 1px solid var(--border-mid); border-radius: var(--r);
+      color: var(--text-1); cursor: pointer; align-items: center; justify-content: center;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .nav-toggle:hover { border-color: var(--border-hi); background: rgba(255,255,255,0.04); }
+    .nav-toggle span, .nav-toggle span::before, .nav-toggle span::after {
+      display: block; width: 16px; height: 1.5px; background: currentColor; border-radius: 1px;
+      position: relative; transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), opacity 0.2s;
+    }
+    .nav-toggle span::before, .nav-toggle span::after { content: ''; position: absolute; left: 0; }
+    .nav-toggle span::before { transform: translateY(-5px); }
+    .nav-toggle span::after  { transform: translateY(5px); }
+    .nav-toggle[aria-expanded="true"] span { background: transparent; }
+    .nav-toggle[aria-expanded="true"] span::before { transform: rotate(45deg); }
+    .nav-toggle[aria-expanded="true"] span::after  { transform: rotate(-45deg); }
+    .nav-drawer {
+      position: absolute; top: 56px; left: 0; right: 0;
+      background: #060606; border-bottom: 1px solid var(--border);
+      padding: 8px 32px 20px; display: flex; flex-direction: column;
+      opacity: 0; transform: translateY(-8px); pointer-events: none; visibility: hidden;
+      transition: opacity 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1), visibility 0s 0.25s;
+    }
+    .nav-drawer.open { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition: opacity 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1); }
+    .nav-drawer a { font-size: 15px; color: var(--text-2); text-decoration: none; padding: 12px 0; border-bottom: 1px solid var(--border); transition: color 0.15s; }
+    .nav-drawer a:last-child { border-bottom: 0; }
+    .nav-drawer a:hover { color: var(--text-1); }
     .btn-outline {
       font-size: 13px; font-weight: 500; color: var(--text-1);
       background: transparent; border: 1px solid var(--border-mid);
@@ -461,6 +490,7 @@
       .setup-grid { grid-template-columns: 1fr; }
       .feature-grid { grid-template-columns: 1fr; }
       .nav-link   { display: none; }
+      .nav-toggle { display: inline-flex; }
       .footer-inner { flex-direction: column; align-items: flex-start; }
     }
     @media (max-width: 500px) {
@@ -491,7 +521,13 @@
       <a href="#features" class="nav-link">Features</a>
       <a href="#integrations" class="nav-link">Integrations</a>
       <a href="#beta" class="btn-outline">Request access</a>
+      <button type="button" class="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="nav-drawer"><span></span></button>
     </div>
+  </div>
+  <div class="nav-drawer" id="nav-drawer">
+    <a href="#how-it-works">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#integrations">Integrations</a>
   </div>
 </nav>
 
@@ -1015,6 +1051,21 @@
 </footer>
 
 <script>
+/* 0. MOBILE MENU - toggles the drawer; a link, Escape or a wider screen closes it */
+(function () {
+  var btn = document.querySelector('.nav-toggle');
+  var drawer = document.getElementById('nav-drawer');
+  function set(open) {
+    drawer.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', String(open));
+    btn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  }
+  btn.addEventListener('click', function () { set(!drawer.classList.contains('open')); });
+  drawer.addEventListener('click', function (e) { if (e.target.closest('a')) set(false); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && drawer.classList.contains('open')) { set(false); btn.focus(); } });
+  window.matchMedia('(min-width: 801px)').addEventListener('change', function (m) { if (m.matches) set(false); });
+}());
+
 /* 1. PROGRESS BAR */
 (function () {
   var bar = document.getElementById('progress');

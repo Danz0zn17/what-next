@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Retired and disputed facts no longer come back from the cloud.** Review state (retire, restore,
+  verify, dispute) lives on the local row only, so `search_memories`, `semantic_search` and
+  `get_context` now read every cloud fact through its local row: retired or archived ones are
+  dropped, disputes show, and the id shown (and named in STALE/DISPUTED markers) is the local id
+  `review_fact` acts on. A cloud fact not yet on this machine shows as `cloud #N` with no
+  `review_fact` id, so a marker can never point at an unrelated local fact.
+- **Cloud search labels project facts with their project** instead of `[global]`; cloud semantic
+  results carry the project too.
+- **Landing: mobile menu.** Under 800px the section links were hidden with no way to reach them;
+  a menu button now opens them in a drawer (closes on a link, Escape, or a wider screen).
+- **Landing: no CSP console error.** The Cloudflare Web Analytics beacon is allowed in the CSP and
+  listed on the privacy page.
 - **Install from npm into a project or prefix.** The postinstall check (now `bin/check-onnx.cjs`)
   looked for `onnxruntime-node` only inside the package folder, so installs where npm hoists it to
   the install root failed. It now finds the binding the way Node does (nested, hoisted or under
