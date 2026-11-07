@@ -330,7 +330,34 @@ async function initSchema() {
     client.release();
   }
 
+  // v2.5.0 fact freshness: additive, nullable, no backfill on the server. Old
+  // clients never send these and keep working; rollback is in
+  // migrations/2.5.0-fact-freshness.down.sql (dropping them is optional, the
+  // previous release ignores them).
+  await pool.query(FACT_FRESHNESS_MIGRATION);
+
   log('info', 'Schema ready');
+}
+
+const FACT_FRESHNESS_MIGRATION = `
+  ALTER TABLE facts ADD COLUMN IF NOT EXISTS source TEXT;
+  ALTER TABLE facts ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMPTZ;
+  ALTER TABLE facts ADD COLUMN IF NOT EXISTS volatility TEXT;
+  ALTER TABLE facts ADD COLUMN IF NOT EXISTS ttl_days INTEGER;
+`;
+
+// Optional v2.5.0 fact fields from a client. Anything invalid is dropped, not
+// rejected, so an older or newer client never gets a 400 for them.
+function factFreshness(body) {
+  const volatility = body.volatility === 'stable' || body.volatility === 'volatile' ? body.volatility : null;
+  const ttl = Number.isInteger(body.ttl_days) && body.ttl_days >= 1 && body.ttl_days <= 3650 ? body.ttl_days : null;
+  const t = typeof body.last_verified_at === 'string' && body.last_verified_at.length <= 64 ? Date.parse(body.last_verified_at) : NaN;
+  return {
+    source: typeof body.source === 'string' && body.source.trim() ? body.source.trim().slice(0, 200) : null,
+    last_verified_at: Number.isFinite(t) ? new Date(t).toISOString() : null,
+    volatility,
+    ttl_days: ttl,
+  };
 }
 
 async function storeEmbedding(userId, rowtype, rowId, text) {
@@ -472,14 +499,16 @@ async function addSession(userId, { project, summary, what_was_built, decisions,
   return id;
 }
 
-async function addFact(userId, { category, content, project, tags }) {
+async function addFact(userId, { category, content, project, tags, ...rest }) {
   let projectId = null; // resolved below
   if (project) projectId = await upsertProject(userId, cap(project, 100));
+  const fr = factFreshness(rest);
   const { rows } = await pool.query(`
-    INSERT INTO facts (user_id, project_id, category, content, tags)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO facts (user_id, project_id, category, content, tags, source, last_verified_at, volatility, ttl_days)
+    VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::TIMESTAMPTZ, NOW()), $8, $9)
     RETURNING id
-  `, [userId, projectId, cap(category, FACT_CAPS.category), cap(content, FACT_CAPS.content), cap(tags, FACT_CAPS.tags)]);
+  `, [userId, projectId, cap(category, FACT_CAPS.category), cap(content, FACT_CAPS.content), cap(tags, FACT_CAPS.tags),
+    fr.source, fr.last_verified_at, fr.volatility, fr.ttl_days]);
   const id = rows[0].id;
   storeEmbedding(userId, 'fact', id, [category, content, tags].filter(Boolean).join(' ')); // fire and forget
   return id;
@@ -505,7 +534,8 @@ async function searchMemories(userId, q, limit = 10) {
   `, [userId, term, limit]).catch(() => ({ rows: [] }));
 
   const { rows: facts } = await pool.query(`
-    SELECT f.id, f.category, f.content, f.tags, f.created_at::TEXT AS created_at
+    SELECT f.id, f.category, f.content, f.tags, f.created_at::TEXT AS created_at,
+           f.source, f.last_verified_at::TEXT AS last_verified_at, f.volatility, f.ttl_days
     FROM facts f
     WHERE f.user_id = $1
       AND to_tsvector('english', COALESCE(f.category,'') || ' ' || COALESCE(f.content,'') || ' ' || COALESCE(f.tags,''))
@@ -1029,7 +1059,8 @@ async function start() {
             WHERE s.user_id = $1 ORDER BY s.session_date DESC LIMIT 5
           `, [user.id]),
           pool.query(`
-            SELECT f.id, f.category, f.content, f.tags, p.name AS project_name
+            SELECT f.id, f.category, f.content, f.tags, p.name AS project_name,
+                   f.created_at::TEXT AS created_at, f.source, f.last_verified_at::TEXT AS last_verified_at, f.volatility, f.ttl_days
             FROM facts f LEFT JOIN projects p ON p.id = f.project_id
             WHERE f.user_id = $1 ORDER BY f.created_at DESC
           `, [user.id]),
@@ -1080,7 +1111,8 @@ async function start() {
         `, [user.id, since]);
         const { rows: facts } = await pool.query(`
           SELECT f.id::TEXT AS cloud_id, p.name AS project_name, f.category,
-                 f.content, f.tags, f.created_at::TEXT AS created_at
+                 f.content, f.tags, f.created_at::TEXT AS created_at,
+                 f.source, f.last_verified_at::TEXT AS last_verified_at, f.volatility, f.ttl_days
           FROM facts f
           LEFT JOIN projects p ON p.id = f.project_id
           WHERE f.user_id = $1 AND f.created_at > $2
@@ -1218,6 +1250,7 @@ export {
   escapeHtml, normalizeEmail, cleanName, parseLimit, parseSince, clientIp, normalizeIp, hashApiKey,
   webhookSecretFrom, safeEqual, checkRateLimit, pruneRateLimit, rateLimitMap, welcomeEmailHtml,
   SESSION_CAPS, FACT_CAPS, sessionEmbText, parseSessionDate, parseBody, MAX_BODY_BYTES,
+  factFreshness, FACT_FRESHNESS_MIGRATION,
 };
 
 // Only boot when run directly (node src/cloud-server.js), so tests can import the helpers.

@@ -20,6 +20,20 @@
  *   GET  /context               → Session-start brief (recent sessions + facts + projects)
  *   GET  /projects              → List all projects
  *   GET  /project/:name         → Get full project history
+ *
+ * v2.5.0 memory upgrade:
+ *   GET  /context?role=engineer       → adds role_block (~30 lines for that role)
+ *   GET  /orientation/:p?role=qa      → adds role_block scoped to the project
+ *   POST /curate/run                  → Dreaming pass (body: { dry_run?: boolean })
+ *   GET  /curate/run/status           → Last dreaming pass report (?run_id=N for one run)
+ *   POST /curate/undo                 → Revert every change a run made (body: { run_id })
+ *   POST /fact/:id/verify|retire|restore → Review a fact after re-checking it
+ *   POST /fact/:id/dispute            → Mark a fact wrong (body: { note?, correction? })
+ *   GET  /fact/:id                    → One fact with freshness and change history
+ *   GET  /pages?kind=client|product   → List entity pages
+ *   GET  /page/:slug                  → One page with links and backlinks
+ *   POST /page                        → Create or update a page
+ * Facts in /context and /search carry a freshness object.
  */
 
 import { createServer } from 'http';
@@ -32,6 +46,10 @@ import { addSession, addFact, editSession, searchMemories, getProject, listProje
 import * as cloud from './cloud-client.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { runCuration } from './curator.js';
+import { runDream } from './dreaming.js';
+import { freshnessOf } from './freshness.js';
+import { buildRoleBlock, normaliseRole, ROLES } from './roles.js';
+import { verifyFact, disputeFact, setFactStatus, restoreFact, undoRun, getCurationRun, getFactChanges, getPage, listPages, upsertPage, getBacklinks, PAGE_KINDS } from './db.js';
 import { indexSession, indexFact } from './indexer.js';
 import { toSessionDate } from './import-chatgpt.js';
 
@@ -566,6 +584,21 @@ function checkProject(value, { optional = false } = {}) {
   return projectNameError(value);
 }
 
+// Facts returned over REST carry their freshness (state, volatility, due_at);
+// existing fields are unchanged.
+function withFreshness(facts) {
+  return (facts ?? []).map(f => ({ ...f, freshness: freshnessOf(f) }));
+}
+
+// ?role= on /context and /orientation: unknown roles are a 400, no role is
+// the old response.
+function roleFrom(url) {
+  const raw = url.searchParams.get('role');
+  if (raw == null || raw === '') return { role: null };
+  const role = normaliseRole(raw);
+  return role ? { role } : { error: `role must be one of ${ROLES.join(', ')}` };
+}
+
 function checkText(body, fields) {
   for (const f of fields) {
     if (body[f] !== undefined && body[f] !== null && typeof body[f] !== 'string') return `${f} must be a string`;
@@ -835,9 +868,10 @@ export function startApiServer() {
       if (method === 'POST' && url.pathname === '/fact') {
         const body = await parseBody(req);
         if (!body.category || !body.content) return send(res, 400, { error: 'category and content are required' });
-        const bad = checkProject(body.project, { optional: true }) ?? checkText(body, ['category', 'content', 'tags']);
+        const bad = checkProject(body.project, { optional: true }) ?? checkText(body, ['category', 'content', 'tags', 'source', 'volatility']);
         if (bad) return send(res, 400, { error: bad });
-        const id = addFact(body);
+        if (body.volatility != null && !['stable', 'volatile'].includes(body.volatility)) return send(res, 400, { error: 'volatility must be stable or volatile' });
+        const id = addFact({ ...body, source: body.source ?? 'api' });
         indexFact(id, body);
         // Write-through to cloud (fire and forget), recording the cloud id on success
         if (cloud.isEnabled()) cloud.postFact(body).then(r => { if (r?.id) setFactCloudId(id, r.id); }).catch(() => {});
@@ -850,8 +884,10 @@ export function startApiServer() {
         if (!q) return send(res, 400, { error: 'q parameter required' });
         const limit = clampLimit(url.searchParams.get('limit'), 10, 50);
         const range = parseTimeRange(q);
-        if (range) return send(res, 200, { ...searchMemories(range.text, limit, range), range: { since: range.since, until: range.until } });
-        return send(res, 200, searchMemories(q, limit));
+        const found = range ? searchMemories(range.text, limit, range) : searchMemories(q, limit);
+        const out = { ...found, facts: withFreshness(found.facts) };
+        if (range) return send(res, 200, { ...out, range: { since: range.since, until: range.until } });
+        return send(res, 200, out);
       }
 
       // GET /hybrid-search?q=...&limit=N — FTS5 + semantic RRF merge
@@ -934,6 +970,111 @@ export function startApiServer() {
         return send(res, 200, last ?? { ran_at: null, message: 'No curation run yet' });
       }
 
+      // POST /curate/run — the dreaming pass (body: { dry_run?: boolean }).
+      // Shares the lock with /curate: both change the same facts.
+      if (method === 'POST' && url.pathname === '/curate/run') {
+        const body = await parseBody(req);
+        if (curationRunning) return send(res, 409, { error: 'A curation run is already in progress' });
+        curationRunning = true;
+        const controller = new AbortController();
+        res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+        try {
+          return send(res, 200, await runDream({ apply: body.dry_run !== true, signal: controller.signal, budgetMs: CURATE_BUDGET_MS }));
+        } finally {
+          curationRunning = false;
+        }
+      }
+
+      // GET /curate/run/status — last dreaming pass, or ?run_id=N
+      if (method === 'GET' && url.pathname === '/curate/run/status') {
+        const raw = url.searchParams.get('run_id');
+        if (raw != null) {
+          const run = /^\d+$/.test(raw) ? getCurationRun(parseInt(raw, 10)) : null;
+          return run ? send(res, 200, run) : send(res, 404, { error: 'No such run' });
+        }
+        return send(res, 200, getLastCurationRun('dream') ?? { ran_at: null, message: 'No dreaming pass yet' });
+      }
+
+      // POST /curate/undo — revert every change a curation or dreaming run made
+      if (method === 'POST' && url.pathname === '/curate/undo') {
+        const body = await parseBody(req);
+        if (!Number.isInteger(body.run_id) || body.run_id < 1) return send(res, 400, { error: 'run_id (integer) is required' });
+        if (!getCurationRun(body.run_id)) return send(res, 404, { error: 'No such run' });
+        if (curationRunning) return send(res, 409, { error: 'A curation run is in progress' });
+        const result = undoRun(body.run_id);
+        setImmediate(() => { try { writeGlobalContext(); } catch {} });
+        return send(res, 200, result);
+      }
+
+      // GET /fact/:id — one fact, its freshness and its change history
+      const factMatch = url.pathname.match(/^\/fact\/(\d+)(?:\/(verify|retire|restore|dispute))?$/);
+      if (method === 'GET' && factMatch && !factMatch[2]) {
+        const fact = getFactById(parseInt(factMatch[1], 10));
+        if (!fact) return send(res, 404, { error: 'Fact not found' });
+        return send(res, 200, { ...fact, freshness: freshnessOf(fact), changes: getFactChanges(fact.id) });
+      }
+
+      // POST /fact/:id/verify|retire|restore|dispute
+      if (method === 'POST' && factMatch && factMatch[2]) {
+        const id = parseInt(factMatch[1], 10);
+        const action = factMatch[2];
+        const body = await parseBody(req);
+        const bad = checkText(body, ['note', 'correction']);
+        if (bad) return send(res, 400, { error: bad });
+        const fact = getFactById(id);
+        if (!fact) return send(res, 404, { error: 'Fact not found' });
+        let state;
+        if (action === 'verify') {
+          if (fact.status !== 'active') return send(res, 409, { error: `Fact is ${fact.status}; restore it first` });
+          state = verifyFact(id, { note: body.note });
+        } else if (action === 'retire') {
+          state = setFactStatus(id, 'retired', { note: body.note });
+          if (!state) return send(res, 409, { error: `Fact is already ${fact.status}` });
+        } else if (action === 'restore') {
+          state = restoreFact(id, { note: body.note });
+        } else {
+          if (fact.status !== 'active') return send(res, 409, { error: `Fact is ${fact.status}` });
+          state = disputeFact(id, { note: body.note, correction: body.correction });
+        }
+        setImmediate(() => {
+          try { if (fact.project_name) writeSidecarForProject(fact.project_name); } catch {}
+          try { writeGlobalContext(); } catch {}
+        });
+        const updated = getFactById(id);
+        return send(res, 200, { ok: true, action, fact: { ...updated, freshness: freshnessOf(updated) } });
+      }
+
+      // GET /pages?kind=client|product
+      if (method === 'GET' && url.pathname === '/pages') {
+        const kind = url.searchParams.get('kind');
+        if (kind && !PAGE_KINDS.includes(kind)) return send(res, 400, { error: `kind must be ${PAGE_KINDS.join(' or ')}` });
+        return send(res, 200, { pages: listPages({ kind: kind || null }) });
+      }
+
+      // GET /page/:slug
+      const pageMatch = url.pathname.match(/^\/page\/(.+)$/);
+      if (method === 'GET' && pageMatch) {
+        const page = getPage(decodeParam(pageMatch[1]));
+        if (!page) return send(res, 404, { error: 'Page not found' });
+        return send(res, 200, { ...page, backlinks: getBacklinks(page.slug) });
+      }
+
+      // POST /page — create or update (body: slug, kind?, title?, project?, fields?, notes?, links?, unlink?)
+      if (method === 'POST' && url.pathname === '/page') {
+        const body = await parseBody(req);
+        if (typeof body.slug !== 'string' || !body.slug.trim()) return send(res, 400, { error: 'slug is required' });
+        const bad = checkProject(body.project, { optional: true }) ?? checkText(body, ['slug', 'kind', 'title', 'notes']);
+        if (bad) return send(res, 400, { error: bad });
+        if (body.fields != null && (typeof body.fields !== 'object' || Array.isArray(body.fields))) return send(res, 400, { error: 'fields must be an object' });
+        for (const k of ['links', 'unlink']) if (body[k] != null && !Array.isArray(body[k])) return send(res, 400, { error: `${k} must be an array` });
+        try {
+          const page = upsertPage({ ...body, source: 'manual' });
+          return send(res, 200, { ok: true, page });
+        } catch (err) {
+          return send(res, 400, { error: err.message });
+        }
+      }
+
       // GET /flagged - stored memory whose text tripped the injection check.
       // Nothing here is hidden from search or the cards; this is the review list.
       if (method === 'GET' && url.pathname === '/flagged') {
@@ -1008,12 +1149,16 @@ export function startApiServer() {
 
       // GET /context — session-start brief (recent sessions + all facts + projects)
       if (method === 'GET' && url.pathname === '/context') {
+        const { role, error } = roleFrom(url);
+        if (error) return send(res, 400, { error });
         const [recent, facts, projects] = await Promise.all([
           Promise.resolve(getRecentSessions(5)),
           Promise.resolve(getAllFacts()),
           Promise.resolve(listProjects()),
         ]);
-        return send(res, 200, { recent_sessions: recent, facts, active_projects: projects });
+        const body = { recent_sessions: recent, facts: withFreshness(facts), active_projects: projects };
+        if (role) body.role_block = buildRoleBlock(role).join('\n');
+        return send(res, 200, body);
       }
 
       // GET /projects
@@ -1061,7 +1206,11 @@ export function startApiServer() {
         const intel = getProjectIntelligence(name);
         const sessions = getRecentSessionsForProject(name, 3);
         const commits = getRecentCommits(name, 5);
-        return send(res, 200, { project: name, intelligence: intel, recent_sessions: sessions, next_steps: latestNextSteps(name), recent_commits: commits });
+        const { role, error } = roleFrom(url);
+        if (error) return send(res, 400, { error });
+        const body = { project: name, intelligence: intel, recent_sessions: sessions, next_steps: latestNextSteps(name), recent_commits: commits };
+        if (role) body.role_block = buildRoleBlock(role, { project: name }).join('\n');
+        return send(res, 200, body);
       }
 
       // POST /commit-context — receive git commit events from watcher

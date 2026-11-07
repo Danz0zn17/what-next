@@ -148,7 +148,7 @@ export async function pushToCloud({ batch = PUSH_BATCH, minAgeMinutes = PUSH_MIN
     }
 
     const facts = db.prepare(`
-      SELECT f.id, p.name AS project, f.category, f.content, f.tags
+      SELECT f.id, p.name AS project, f.category, f.content, f.tags, f.source, f.volatility, f.ttl_days, f.last_verified_at
       FROM facts f LEFT JOIN projects p ON p.id = f.project_id
       WHERE f.cloud_id IS NULL AND f.sync_error IS NULL AND f.status = 'active' AND COALESCE(julianday(f.created_at), 0) <= julianday('now', ?)
       ORDER BY f.id ASC LIMIT ?
