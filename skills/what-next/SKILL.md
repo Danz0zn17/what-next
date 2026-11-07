@@ -48,8 +48,43 @@ curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/fact" \
     "category": "preference",
     "content": "The fact or insight",
     "project": "optional-project-name",
-    "tags": "optional,tags"
+    "tags": "optional,tags",
+    "source": "where it came from (optional)",
+    "volatility": "volatile"
   }'
+```
+
+Use `"volatility": "volatile"` for anything that changes in the real world (contacts, prices, URLs, deploy targets, status); it goes stale after `ttl_days` (default 30). Tag a fact `role:engineer` (or `ceo`, `qa`, `growth`, `ops`) to put it in that role's start-up block.
+
+**Stale and disputed facts** — A fact shown with `[STALE ...]` has not been checked recently; one with `[DISPUTED ...]` was reported wrong. Do not act on either as true: check it against the real system first, then record the result:
+
+```bash
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/fact/FACT_ID/verify" -H 'Content-Type: application/json' -d '{"note": "checked in Netlify"}'
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/fact/FACT_ID/retire"  -H 'Content-Type: application/json' -d '{"note": "site moved"}'
+```
+
+**When a memory was wrong** — Mark it, with the correct text if you know it. The next dreaming pass replaces it:
+
+```bash
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/fact/FACT_ID/dispute" \
+  -H 'Content-Type: application/json' \
+  -d '{"note": "what was wrong", "correction": "the correct fact"}'
+```
+
+**Role start-up block** — A short (max 30 lines) brief for your job instead of everything:
+
+```bash
+curl -s "http://localhost:${WHATNEXT_PORT:-3747}/context?role=engineer"          # role_block field
+curl -s "http://localhost:${WHATNEXT_PORT:-3747}/orientation/PROJECT?role=qa"
+```
+
+**Client and product pages** — Repo, hosting, database, live or not, open issues, last decision, links:
+
+```bash
+curl -s "http://localhost:${WHATNEXT_PORT:-3747}/pages"
+curl -s "http://localhost:${WHATNEXT_PORT:-3747}/page/surf-rides"
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/page" -H 'Content-Type: application/json' \
+  -d '{"slug": "surf-rides", "kind": "product", "fields": {"live": "yes", "hosting": "Netlify site surf-rides"}, "links": ["surf-rides-co"]}'
 ```
 
 **To get full project history** — When the user wants everything about a specific project:
@@ -71,6 +106,16 @@ curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/curate" \
   -H 'Content-Type: application/json' \
   -d '{"dry_run": true}'
 ```
+
+**To run the dreaming pass** — Fixes disputed facts, merges duplicates, turns session lessons into facts, flags contradictions, lists facts due for re-check and refreshes pages. Preview first; every run can be undone:
+
+```bash
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/curate/run" -H 'Content-Type: application/json' -d '{"dry_run": true}'
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/curate/run" -H 'Content-Type: application/json' -d '{}'
+curl -s -X POST "http://localhost:${WHATNEXT_PORT:-3747}/curate/undo" -H 'Content-Type: application/json' -d '{"run_id": 42}'
+```
+
+To help it, write lasting lessons in a session as `Lesson: ...` or `Gotcha: ...`.
 
 **To search with hybrid ranking** — Better than plain keyword search (FTS5 + semantic RRF):
 
@@ -97,10 +142,11 @@ curl -s -X PATCH "http://localhost:${WHATNEXT_PORT:-3747}/session/SESSION_ID" \
 - `next_steps` — what to pick up next session
 - `tags` — comma-separated tags (e.g. `auth,api,bug-fix`)
 
-`POST /fact` categories: `preference`, `pattern`, `lesson`, `stack-choice`
+`POST /fact` categories: `preference`, `pattern`, `lesson`, `stack-choice`, `client` (written as `Name: details`, seeds a client page), `deploy`, `contact`, `pricing`. Optional: `source`, `volatility` (`stable` | `volatile`), `ttl_days`.
 
 ## Notes
 
 - Only save when something real was built, decided, or learned — skip casual exchanges
+- Save what the next agent would need to avoid redoing work or repeating a mistake
 - If curl returns "connection refused", the user needs to start What Next: `launchctl start com.whatnextai.api`
 - Session data is also synced to cloud automatically when the user has a What Next API key configured

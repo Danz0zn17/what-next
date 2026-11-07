@@ -7,14 +7,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-07
+
+Memory that checks itself, not just stores things. Based on Anthropic's "components of agent
+memory" research: freshness on every fact, an offline dreaming pass, linked pages per client and
+product, short role start-up blocks and a feedback loop. Everything is additive: existing tools,
+endpoints, data and clients behave as before unless they use the new options.
+
 ### Added
+- **Fact freshness.** Every fact now carries `source` and `last_verified_at`, and optionally
+  `volatility` (`stable` | `volatile`) and `ttl_days`. Volatility is inferred when not given:
+  contacts, prices, URLs, deploy targets, status and client facts are volatile; lessons never are.
+  A volatile fact not re-checked within its TTL (default 30 days, `WHATNEXT_VOLATILE_TTL_DAYS`)
+  is shown with a `[STALE ...]` marker in `get_context`, `get_orientation`, `search_memories`,
+  `semantic_search` and the context cards. Fresh and stable facts read exactly as before.
+  `add_fact` and `POST /fact` take the new fields; REST responses carry a `freshness` object.
+- **Feedback loop.** `send_feedback` takes an optional `fact_id` (and `correction`): the fact is
+  marked disputed locally, shown with a `[DISPUTED ...]` marker, and handled first by the next
+  dreaming pass. Works without the cloud; the message still goes to the maintainer as before.
+- **`review_fact` tool** (and `POST /fact/:id/verify|retire|restore|dispute`, `GET /fact/:id`):
+  after re-checking a fact, verify it (fresh again, dispute cleared), retire it or restore it.
+- **Dreaming pass** (`src/dreaming.js`, built on the curator): disputed facts first (a correction
+  replaces the old fact, which is superseded), then duplicates, then lessons promoted from
+  sessions since the last pass (lines marked "Lesson:", "Gotcha:" and "Never/Always" decisions),
+  then contradictions (similar facts naming different URLs, emails, phone numbers or amounts: the
+  older is marked disputed), then the list of volatile facts due for re-check, then entity pages.
+  Run it with `curate_memory` `mode: "full"`, `POST /curate/run`, or `npm run dream`
+  (`npm run dream:dry` reports only). `GET /curate/run/status` shows the last report.
+  Set `WHATNEXT_DREAM=1` to make the daily background run the full pass (default stays
+  duplicates only).
+- **Nothing is deleted, everything is reversible.** New fact statuses `superseded` and `retired`
+  sit next to `archived`. Every change by the curator, the dreaming pass or a review is journalled
+  in `memory_changes`; `POST /curate/undo {"run_id": N}` or `npm run dream -- --undo N` reverts a
+  whole run (changes a person made since are left alone).
+- **Linked entity pages.** One page per client and per product (repo, hosting, database, URL, live,
+  stack, contact, open issues, last decision, notes) with links and backlinks. New tools
+  `get_page` and `update_page`, and `GET /pages`, `GET /page/:slug`, `POST /page`. The dreaming
+  pass seeds product pages from your projects and client pages from `client` facts; fields you set
+  by hand are never overwritten by seeding.
+- **Role start-up blocks.** `get_context` and `get_orientation` take an optional `role`
+  (`ceo`, `engineer`, `qa`, `growth`, `ops`; `?role=` on REST) and return a block of at most 30
+  lines for that job: facts tagged `role:<role>` first, then the role's categories, the pages it
+  works from, and a stale/disputed count. No role is the old output.
+- Cloud: facts accept and return `source`, `last_verified_at`, `volatility`, `ttl_days`
+  (four nullable columns, added on boot). Rollback: `migrations/2.5.0-fact-freshness.down.sql`;
+  v2.4.x also runs unchanged on the migrated schema. `scripts/cloud-migration-check.sh` tests
+  upgrade and rollback on a throwaway Postgres.
+
+### Changed
+- `curate_memory` journals its archives under a run id, and curation runs record a `kind`
+  (`curate` or `dream`). Its default output is unchanged.
+- Tool count 14 -> 17 (`review_fact`, `get_page`, `update_page`); `tools/list` stays under 12 KB.
+
+### Migration
+- Local SQLite: new nullable columns on `facts`, new tables `memory_changes` and `entity_pages`,
+  `curation_runs.kind` defaulting to `curate`. Existing facts are backfilled once with
+  `source = 'unverified'`; no row is changed otherwise or dropped. Tested against a real v2.4.0
+  database (`test/fixtures/v2.4.0.db`).
+
+### Added (earlier, unreleased in 2.4.0)
 - **Optional remote access over Streamable HTTP** (`npm run mcp:http`, `src/http-mcp.js`). Serves the same
   14 tools as the stdio server so another machine on your tailnet, or claude.ai through Tailscale Funnel,
   can use your memory. Off unless you start it. Binds to 127.0.0.1 only, refuses to start without
   `WHATNEXT_MCP_HTTP_TOKEN` (32+ chars), requires `Authorization: Bearer`, checks the Host header against
   an allowlist, and runs stateless. The stdio server and the REST API on 3747 are unchanged.
 
-### Changed
+### Changed (earlier, unreleased in 2.4.0)
 - Tool registration moved from `src/server.js` to `src/mcp-tools.js` (`createServer()`), so both entry
   points share one tool set. `src/server.js` is still the stdio entry; no config changes needed.
 
