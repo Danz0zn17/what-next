@@ -22,7 +22,9 @@ const db = await import('../src/db.js');
 const { runDream, extractLessons, findContradictions, valueTokens, formatDreamReport } = await import('../src/dreaming.js');
 const { seedPages, planSeed, renderPage, clientNameFromFact } = await import('../src/pages.js');
 const { buildRoleBlock, ROLE_BLOCK_MAX_LINES } = await import('../src/roles.js');
+const { freshnessMarker } = await import('../src/freshness.js');
 const raw = db.default;
+const freshnessMarkerOf = (id) => freshnessMarker(db.getFactById(id));
 
 // Every embedding the curator would need is absent, and the curator only
 // loads the model when facts are missing from the index. Stub the loader by
@@ -273,4 +275,44 @@ test('role block: growth sees client pages; project scope; bad role throws', () 
   assert.match(qa[0], /QA start-up block - surf-rides/);
   assert.throws(() => buildRoleBlock('intern'), /role must be one of/);
   assert.ok(buildRoleBlock('ops', { maxLines: 12 }).length <= 12);
+});
+
+// ─── Freshness survives seeding (GRE-367 QA finding 2) ─────────────────────
+test('pages: a stale fact stays stale on the seeded page field and in the role block', () => {
+  const liveId = fact({ project: 'kelp-shop', category: 'live', content: 'Live at https://kelp-shop.netlify.app', volatility: 'volatile' });
+  backdate(liveId, '2026-06-01 00:00:00');
+  assert.match(freshnessMarkerOf(liveId), /STALE/, 'the fact itself is stale');
+  seedPages({ apply: true });
+  const page = db.getPage('kelp-shop');
+  assert.equal(page.fields.live.fact_id, liveId);
+  assert.equal(page.fields.live.checked_at.slice(0, 10), '2026-06-01');
+  // updated_at is the seeding time; the page must not read as freshly checked.
+  const liveLine = renderPage(page).find(l => l.startsWith('- **Live:**'));
+  assert.match(liveLine, /\[STALE - last checked 2026-06-01, re-check before use; review_fact id \d+\]/);
+  const block = buildRoleBlock('engineer', { project: 'kelp-shop' }).join('\n');
+  assert.match(block, /- kelp-shop: Live at https:\/\/kelp-shop\.netlify\.app \[STALE\]/);
+  assert.match(block, /page value\(s\) below are marked STALE or DISPUTED/);
+
+  // Re-checking the fact clears the warning everywhere, and reseeding picks up the new check time.
+  db.verifyFact(liveId);
+  assert.doesNotMatch(renderPage(db.getPage('kelp-shop')).join('\n'), /- \*\*Live:\*\*.*STALE/);
+  assert.doesNotMatch(buildRoleBlock('engineer', { project: 'kelp-shop' }).join('\n'), /kelp-shop:.*\[STALE\]/);
+  assert.ok(seedPages({ apply: true }).updated.includes('kelp-shop'));
+  assert.notEqual(db.getPage('kelp-shop').fields.live.checked_at.slice(0, 10), '2026-06-01');
+  assert.deepEqual(seedPages({ apply: true }), { created: [], updated: [] });
+
+  // A disputed source fact shows as disputed on the page.
+  db.disputeFact(liveId, { note: 'site moved' });
+  assert.match(renderPage(db.getPage('kelp-shop')).join('\n'), /- \*\*Live:\*\*.*\[DISPUTED - source fact reported wrong/);
+});
+
+test('pages: a manual value never inherits a seeded fact link', () => {
+  db.upsertPage({ slug: 'kelp-shop', fields: { live: 'Live at https://kelp.co.za' } });
+  const f = db.getPage('kelp-shop').fields.live;
+  assert.equal(f.source, 'manual');
+  assert.equal(f.fact_id, undefined);
+  assert.equal(f.checked_at, undefined);
+  // meta is ignored outside seeding (REST and MCP pass source 'manual').
+  db.upsertPage({ slug: 'kelp-shop', fields: { status: 'building' }, meta: { status: { fact_id: 1, checked_at: '2020-01-01T00:00:00Z' } } });
+  assert.equal(db.getPage('kelp-shop').fields.status.fact_id, undefined);
 });

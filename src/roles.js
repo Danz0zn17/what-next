@@ -15,6 +15,7 @@
 
 import { getAllFacts, listPages } from './db.js';
 import { freshnessOf, freshnessMarker } from './freshness.js';
+import { pageFieldTag } from './pages.js';
 
 export const ROLES = ['ceo', 'engineer', 'qa', 'growth', 'ops'];
 export const ROLE_BLOCK_MAX_LINES = 30;
@@ -63,6 +64,9 @@ function trunc(s, n) {
   return flat.length > n ? flat.slice(0, n - 3) + '...' : flat;
 }
 
+// Page fields shown in a role block's one-line page snippets.
+const SNIPPET_FIELDS = ['hosting', 'live', 'contact'];
+
 const hasRoleTag = (f, role) => String(f.tags ?? '').toLowerCase().split(',').map(t => t.trim()).includes(`role:${role}`);
 
 /**
@@ -84,19 +88,22 @@ export function buildRoleBlock(role, { project = null, now = Date.now(), facts: 
     .sort((a, b) => rank(a) - rank(b) || String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id);
 
   const lines = [`## ${profile.title} start-up block${project ? ` - ${project}` : ''}`, `Focus: ${profile.focus}.`, ''];
+  const pages = (givenPages ?? listPages({ kind: profile.pages }))
+    .filter(p => !project || !p.project_name || p.project_name === project)
+    .slice(0, 6);
+  const flaggedFields = pages.reduce((n, p) => n + SNIPPET_FIELDS.filter(k => p.fields[k]?.value && pageFieldTag(k, p.fields[k], now)).length, 0);
+
   const footer = [];
   const stale = all.filter(f => freshnessOf(f, now).state === 'stale').length;
   if (stale || disputed.length) {
     footer.push('', `Warning: ${stale} stale and ${disputed.length} disputed fact(s) in scope. Stale ones are marked; disputed ones are left out until re-checked (review_fact).`);
   }
+  if (flaggedFields) footer.push('', `Warning: ${flaggedFields} page value(s) below are marked STALE or DISPUTED. Re-check them before use (get_page shows the source fact).`);
   footer.push('', 'Everything else: search_memories or semantic_search. Pages: get_page.');
-
-  const pages = (givenPages ?? listPages({ kind: profile.pages }))
-    .filter(p => !project || !p.project_name || p.project_name === project)
-    .slice(0, 6);
   const pageLines = pages.length
     ? [`**${profile.pages === 'client' ? 'Client' : 'Product'} pages:**`, ...pages.map(p => {
-      const bits = ['hosting', 'live', 'contact'].map(k => p.fields[k]?.value).filter(Boolean).map(v => trunc(v, 50));
+      const bits = SNIPPET_FIELDS.filter(k => p.fields[k]?.value)
+        .map(k => `${trunc(p.fields[k].value, 50)}${pageFieldTag(k, p.fields[k], now)}`);
       return `- ${p.slug}${bits.length ? `: ${bits.join(' | ')}` : ''}`;
     }), '']
     : [];

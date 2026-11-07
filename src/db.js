@@ -1133,8 +1133,11 @@ export function getBacklinks(slug) {
  * source tags who set them ('manual' from tools/REST, 'seed' from seeding).
  * Seeding (source 'seed') never overwrites a field a person or agent set.
  * links: slugs to add; unlink: slugs to remove. Returns the page.
+ * meta (seeding only): { name: { fact_id, checked_at } } - the fact a field was
+ * copied from and when that fact was last checked, so a page never shows an
+ * old value as freshly checked (pages.js pageFieldState).
  */
-export function upsertPage({ slug, kind, title, project, fields = {}, notes, links = [], unlink = [], source = 'manual' }) {
+export function upsertPage({ slug, kind, title, project, fields = {}, notes, links = [], unlink = [], source = 'manual', meta = {} }) {
   const s = slugify(slug || title);
   if (!s) throw new Error('page needs a slug or title');
   return db.transaction(() => {
@@ -1153,8 +1156,13 @@ export function upsertPage({ slug, kind, title, project, fields = {}, notes, lin
         continue;
       }
       const value = neutralize(String(raw)).text.slice(0, PAGE_FIELD_MAX);
-      if (prev?.value === value) continue;
+      const m = source === 'seed' ? meta?.[name] ?? {} : {};
+      const factId = Number.isInteger(m.fact_id) ? m.fact_id : null;
+      const checkedAt = typeof m.checked_at === 'string' && m.checked_at ? m.checked_at : null;
+      if (prev?.value === value && (prev.fact_id ?? null) === factId && (prev.checked_at ?? null) === checkedAt) continue;
       merged[name] = { value, source, updated_at: now };
+      if (factId != null) merged[name].fact_id = factId;
+      if (checkedAt) merged[name].checked_at = checkedAt;
       changed = true;
     }
     const linkSet = new Set(existing?.links ?? []);

@@ -13,14 +13,16 @@
  *                   with a name ("Acme Surf: owner Jo, ..."), linked to the
  *                   fact's project page.
  * Seeded fields are tagged source 'seed'; a field set through update_page is
- * 'manual' and seeding never overwrites it.
+ * 'manual' and seeding never overwrites it. A field copied from a fact keeps
+ * that fact's id and last-checked time, so an old value is shown stale on the
+ * page (and in role blocks) exactly as it is on the fact itself.
  */
 
 import {
   listProjects, getProjectIntelligence, getLatestSessionWith, getProjectFacts, getAllFacts,
-  getPage, upsertPage, getBacklinks, slugify, PAGE_FIELDS,
+  getPage, upsertPage, getBacklinks, getFactById, slugify, PAGE_FIELDS,
 } from './db.js';
-import { freshnessMarker, toMs, DEFAULT_TTL_DAYS } from './freshness.js';
+import { freshnessOf, freshnessMarker, toMs, DEFAULT_TTL_DAYS } from './freshness.js';
 
 const DAY_MS = 86_400_000;
 // Page fields whose value changes in the real world; shown stale after the TTL.
@@ -51,7 +53,10 @@ export function clientNameFromFact(content) {
   return /[a-z0-9]/i.test(name) && name.split(/\s+/).length <= 6 ? name : null;
 }
 
-// What seeding would write: [{ slug, kind, title, project, fields, links }].
+// When a fact was last checked (last_verified_at, else created_at), as ISO.
+const factMeta = (f) => ({ fact_id: Number(f.id), checked_at: freshnessOf(f).checked_at });
+
+// What seeding would write: [{ slug, kind, title, project, fields, meta, links }].
 export function planSeed() {
   const plans = new Map();
   const productSlug = new Map();
@@ -59,7 +64,7 @@ export function planSeed() {
     const slug = slugify(p.name);
     if (!slug || plans.has(slug)) continue;
     const intel = getProjectIntelligence(p.name);
-    const fields = {};
+    const fields = {}, meta = {};
     if (p.description) fields.summary = trunc(p.description, 400);
     if (intel?.repo_path) fields.repo = intel.repo_path;
     if (intel?.deployment) fields.hosting = trunc(intel.deployment, 400);
@@ -71,9 +76,9 @@ export function planSeed() {
     // Newest fact wins per field (getProjectFacts is newest first).
     for (const f of getProjectFacts(p.name, 200)) {
       const hit = FACT_FIELD.find(([re]) => re.test(String(f.category ?? '').trim()));
-      if (hit && !fields[hit[1]]) fields[hit[1]] = trunc(f.content, 400);
+      if (hit && !fields[hit[1]]) { fields[hit[1]] = trunc(f.content, 400); meta[hit[1]] = factMeta(f); }
     }
-    plans.set(slug, { slug, kind: 'product', title: p.name, project: p.name, fields, links: [] });
+    plans.set(slug, { slug, kind: 'product', title: p.name, project: p.name, fields, meta, links: [] });
     productSlug.set(p.name, slug);
   }
   for (const f of getAllFacts()) {
@@ -84,8 +89,8 @@ export function planSeed() {
     // A client and a product with the same name share a slug; keep the client
     // page distinct.
     const clientSlug = plans.has(slug) && plans.get(slug).kind === 'product' ? `${slug}-client` : slug;
-    const plan = plans.get(clientSlug) ?? { slug: clientSlug, kind: 'client', title: name, project: null, fields: {}, links: [] };
-    if (!plan.fields.summary) plan.fields.summary = trunc(f.content, 400);
+    const plan = plans.get(clientSlug) ?? { slug: clientSlug, kind: 'client', title: name, project: null, fields: {}, meta: {}, links: [] };
+    if (!plan.fields.summary) { plan.fields.summary = trunc(f.content, 400); plan.meta.summary = factMeta(f); }
     const prod = f.project_name && productSlug.get(f.project_name);
     if (prod) {
       if (!plan.links.includes(prod)) plan.links.push(prod);
@@ -105,6 +110,8 @@ function seedDiff(plan) {
     const prev = page.fields[name];
     if (prev && prev.source !== 'seed') continue;
     if (prev?.value !== value) return 'update';
+    const m = plan.meta?.[name] ?? {};
+    if ((prev.fact_id ?? null) !== (m.fact_id ?? null) || (prev.checked_at ?? null) !== (m.checked_at ?? null)) return 'update';
   }
   if (plan.links.some(l => !page.links.includes(l))) return 'update';
   return null;
@@ -121,11 +128,40 @@ export function seedPages({ apply = true } = {}) {
   return { created, updated };
 }
 
-function fieldMarker(name, field, now) {
-  if (!VOLATILE_FIELDS.has(name)) return '';
-  const at = toMs(field.updated_at);
-  if (!Number.isFinite(at) || now - at < DEFAULT_TTL_DAYS * DAY_MS) return '';
-  return ` [STALE - set ${day(field.updated_at)}, re-check before use]`;
+/**
+ * Freshness of one page field: null when fine, else { state, checked_at, fact_id }.
+ * A field copied from a fact follows that fact (stale or disputed there means
+ * stale or disputed here). Any volatile field is also stale once its value was
+ * last checked more than the TTL ago - the source fact's check time when it
+ * has one, not the time seeding copied it onto the page.
+ */
+export function pageFieldState(name, field, now = Date.now()) {
+  if (!field) return null;
+  const fact = field.fact_id != null ? getFactById(field.fact_id) : null;
+  const live = fact && fact.status === 'active' ? fact : null;
+  const fr = live ? freshnessOf(live, now) : null;
+  const checkedAt = fr?.checked_at ?? field.checked_at ?? field.updated_at;
+  const out = (state) => ({ state, checked_at: checkedAt, fact_id: field.fact_id ?? null });
+  if (fr?.state === 'disputed') return out('disputed');
+  if (fr?.state === 'stale') return out('stale');
+  if (!VOLATILE_FIELDS.has(name)) return null;
+  const at = toMs(checkedAt);
+  if (!Number.isFinite(at) || now - at < DEFAULT_TTL_DAYS * DAY_MS) return null;
+  return out('stale');
+}
+
+export function pageFieldMarker(name, field, now = Date.now()) {
+  const st = pageFieldState(name, field, now);
+  if (!st) return '';
+  const ref = st.fact_id != null ? `; review_fact id ${st.fact_id}` : '';
+  if (st.state === 'disputed') return ` [DISPUTED - source fact reported wrong. Check before use${ref}]`;
+  return ` [STALE - last checked ${day(st.checked_at)}, re-check before use${ref}]`;
+}
+
+// Short form for one-line snippets (role blocks, page lists).
+export function pageFieldTag(name, field, now = Date.now()) {
+  const st = pageFieldState(name, field, now);
+  return st ? ` [${st.state === 'disputed' ? 'DISPUTED' : 'STALE'}]` : '';
 }
 
 const LABEL = {
@@ -141,7 +177,7 @@ export function renderPage(page, { now = Date.now() } = {}) {
   if (names.length === 0) lines.push('_No fields yet. Fill them with update_page._');
   for (const n of names) {
     const f = page.fields[n];
-    lines.push(`- **${LABEL[n] ?? n}:** ${f.value}  _(${f.source}, ${day(f.updated_at)})_${fieldMarker(n, f, now)}`);
+    lines.push(`- **${LABEL[n] ?? n}:** ${f.value}  _(${f.source}, ${day(f.updated_at)})_${pageFieldMarker(n, f, now)}`);
   }
   if (page.notes) { lines.push('', '## Notes', page.notes); }
   const backlinks = getBacklinks(page.slug);
@@ -162,12 +198,12 @@ export function renderPage(page, { now = Date.now() } = {}) {
   return lines;
 }
 
-export function renderPageList(pages) {
+export function renderPageList(pages, { now = Date.now() } = {}) {
   if (pages.length === 0) return ['No pages yet. Run the dreaming pass (curate_memory mode "full") to seed them from your projects, or create one with update_page.'];
   const lines = [`# Pages (${pages.length})`, ''];
   for (const p of pages) {
-    const live = p.fields.live?.value ? ` - live: ${trunc(p.fields.live.value, 40)}` : '';
-    const host = p.fields.hosting?.value ? ` - ${trunc(p.fields.hosting.value, 60)}` : '';
+    const live = p.fields.live?.value ? ` - live: ${trunc(p.fields.live.value, 40)}${pageFieldTag('live', p.fields.live, now)}` : '';
+    const host = p.fields.hosting?.value ? ` - ${trunc(p.fields.hosting.value, 60)}${pageFieldTag('hosting', p.fields.hosting, now)}` : '';
     lines.push(`- **${p.slug}** (${p.kind}) ${p.title}${host}${live}`);
   }
   lines.push('', 'Open one with get_page { slug }.');

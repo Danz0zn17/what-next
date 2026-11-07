@@ -48,6 +48,7 @@ import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
 import { runCuration } from './curator.js';
 import { runDream } from './dreaming.js';
 import { freshnessOf } from './freshness.js';
+import { pageFieldState } from './pages.js';
 import { buildRoleBlock, normaliseRole, ROLES } from './roles.js';
 import { verifyFact, disputeFact, setFactStatus, restoreFact, undoRun, getCurationRun, getFactChanges, getPage, listPages, upsertPage, getBacklinks, PAGE_KINDS } from './db.js';
 import { indexSession, indexFact } from './indexer.js';
@@ -1056,7 +1057,9 @@ export function startApiServer() {
       if (method === 'GET' && pageMatch) {
         const page = getPage(decodeParam(pageMatch[1]));
         if (!page) return send(res, 404, { error: 'Page not found' });
-        return send(res, 200, { ...page, backlinks: getBacklinks(page.slug) });
+        // field_freshness (additive): per field, null when fine or { state, checked_at, fact_id }.
+        const fieldFreshness = Object.fromEntries(Object.entries(page.fields).map(([k, f]) => [k, pageFieldState(k, f)]));
+        return send(res, 200, { ...page, field_freshness: fieldFreshness, backlinks: getBacklinks(page.slug) });
       }
 
       // POST /page — create or update (body: slug, kind?, title?, project?, fields?, notes?, links?, unlink?)
