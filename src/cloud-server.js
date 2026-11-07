@@ -49,20 +49,11 @@ import { realpathSync } from 'fs';
 import { fileURLToPath } from 'url';
 import pkg from 'pg';
 const { Pool } = pkg;
-import { pipeline } from '@huggingface/transformers';
+import { generateEmbedding as embed, warmEmbedder } from './embeddings.js';
 
-// ─── Embeddings (lazy-loaded, cached after first use) ─────────────────────────
-let _embedder = null;
-async function getEmbedder() {
-  if (!_embedder) {
-    _embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { device: 'cpu' });
-  }
-  return _embedder;
-}
-async function generateEmbedding(text) {
-  const model = await getEmbedder();
-  const out = await model(text.slice(0, 2000), { pooling: 'mean', normalize: true });
-  return Array.from(out.data); // 384-dim float array
+// ─── Embeddings (one shared model load, see embeddings.js) ────────────────────
+function generateEmbedding(text) {
+  return embed(text.slice(0, 2000)); // 384-dim float array
 }
 
 const PORT = process.env.PORT ?? 3001;
@@ -1243,6 +1234,7 @@ async function start() {
 
   server.listen(PORT, () => {
     log('info', 'What Next cloud server started', { port: PORT });
+    warmEmbedder().then((ok) => log(ok ? 'info' : 'warn', ok ? 'Embedding model ready' : 'Embedding model failed to load'));
   });
 }
 
