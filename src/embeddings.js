@@ -26,12 +26,23 @@ export function createEmbedderLoader({ load, clearCache }) {
   };
 }
 
-const getEmbedder = createEmbedderLoader({
+const loadEmbedder = createEmbedderLoader({
   // dtype set explicitly: without it transformers.js prints a "dtype not
   // specified" notice to stderr on every load, which log drains read as an error.
   load: () => pipeline('feature-extraction', MODEL, { device: 'cpu', dtype: 'fp32' }),
   clearCache: () => rmSync(join(env.cacheDir, MODEL), { recursive: true, force: true }),
 });
+
+let loaded = false;
+function getEmbedder() {
+  return loadEmbedder().then((m) => { loaded = true; return m; });
+}
+
+// True once the model has loaded, so callers on a latency budget (the /search
+// fallback) can skip semantic results instead of waiting on a cold start.
+export function embedderReady() {
+  return loaded;
+}
 
 // Load the model ahead of the first search so semantic_search does not pay
 // the cold start inside its tool timeout. Never throws.

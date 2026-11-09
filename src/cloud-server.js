@@ -49,7 +49,7 @@ import { realpathSync } from 'fs';
 import { fileURLToPath } from 'url';
 import pkg from 'pg';
 const { Pool } = pkg;
-import { generateEmbedding as embed, warmEmbedder } from './embeddings.js';
+import { generateEmbedding as embed, warmEmbedder, embedderReady } from './embeddings.js';
 
 // ─── Embeddings (one shared model load, see embeddings.js) ────────────────────
 function generateEmbedding(text) {
@@ -63,7 +63,11 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const RESEND_FROM = process.env.RESEND_FROM ?? 'What Next <noreply@whatnextai.co.za>';
 const TELEGRAM_ALERT_URL = process.env.TELEGRAM_ALERT_URL; // optional: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text=
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+// PGSSLMODE=disable is for local test databases only; production always uses TLS.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+});
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 // Simple in-memory sliding window: 60 requests per minute per IP
@@ -143,6 +147,26 @@ function safeTsQuery(q) {
   if (!words.length) return null;
   // Join as AND query (all words must appear)
   return words.map(w => w + ':*').join(' & ');
+}
+
+// Any-word variant for the search fallback. Hyphens split words here so a
+// question like "dream:dry" or "run-time" still matches its parts. Single
+// characters are dropped (they prefix-match almost everything); Postgres drops
+// English stop words itself.
+function anyWordTsQuery(q) {
+  const words = q.replace(/[^a-zA-Z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 1);
+  if (!words.length) return null;
+  return [...new Set(words.map(w => w.toLowerCase()))].map(w => w + ':*').join(' | ');
+}
+
+// Reciprocal rank fusion: merge ranked id lists into one order. An id ranked
+// well in several lists beats one ranked first in a single list.
+function fuseRanked(lists, k = 60) {
+  const score = new Map();
+  for (const list of lists) {
+    list.forEach((id, i) => score.set(id, (score.get(id) ?? 0) + 1 / (k + i + 1)));
+  }
+  return [...score.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -505,37 +529,110 @@ async function addFact(userId, { category, content, project, tags, ...rest }) {
   return id;
 }
 
+const SESSION_SELECT = `
+  SELECT s.id, p.name AS project_name, s.summary, s.what_was_built,
+         s.decisions, s.stack, s.next_steps, s.tags,
+         s.session_date::TEXT AS session_date
+  FROM sessions s
+  JOIN projects p ON p.id = s.project_id`;
+const SESSION_DOC = `to_tsvector('english', COALESCE(s.summary,'') || ' ' || COALESCE(s.what_was_built,'') || ' ' ||
+                                 COALESCE(s.decisions,'') || ' ' || COALESCE(s.stack,'') || ' ' ||
+                                 COALESCE(s.tags,''))`;
+const FACT_SELECT = `
+  SELECT f.id, f.category, f.content, f.tags, p.name AS project_name, f.created_at::TEXT AS created_at,
+         f.source, f.last_verified_at::TEXT AS last_verified_at, f.volatility, f.ttl_days
+  FROM facts f
+  LEFT JOIN projects p ON p.id = f.project_id`;
+const FACT_DOC = `to_tsvector('english', COALESCE(f.category,'') || ' ' || COALESCE(f.content,'') || ' ' || COALESCE(f.tags,''))`;
+
+// Semantic hits below this cosine score are noise for short memory rows.
+const SEMANTIC_MIN_SCORE = 0.25;
+const SEMANTIC_TIMEOUT_MS = 1_500;
+
+// Nearest embeddings for the fallback, as { session: [ids], fact: [ids] }.
+// Empty while the model is still loading, on timeout or on error: semantic
+// results are a bonus, never a reason for /search to fail or stall.
+async function semanticIds(userId, q, limit) {
+  const empty = { session: [], fact: [] };
+  if (!embedderReady()) {
+    warmEmbedder();
+    return empty;
+  }
+  try {
+    let timer;
+    const vec = await Promise.race([
+      generateEmbedding(q),
+      new Promise((_, fail) => { timer = setTimeout(() => fail(new Error('embedding timeout')), SEMANTIC_TIMEOUT_MS); }),
+    ]).finally(() => clearTimeout(timer));
+    const { rows } = await pool.query(`
+      SELECT rowtype, row_id FROM (
+        SELECT e.rowtype, e.row_id, 1 - (e.embedding <=> $2::vector) AS score,
+               ROW_NUMBER() OVER (PARTITION BY e.rowtype ORDER BY e.embedding <=> $2::vector) AS n
+        FROM embeddings e
+        WHERE e.user_id = $1 AND e.rowtype IN ('session', 'fact')
+      ) ranked
+      WHERE n <= $3 AND score >= $4
+      ORDER BY rowtype, n
+    `, [userId, JSON.stringify(vec), limit, SEMANTIC_MIN_SCORE]);
+    for (const r of rows) empty[r.rowtype].push(r.row_id);
+  } catch (err) {
+    log('warn', 'search: semantic fallback skipped', { err: err.message });
+  }
+  return empty;
+}
+
+// AND-matched rows come first, newest first (the original contract). When one
+// type has fewer than `limit` hits, the rest is filled from an any-word query
+// ranked by ts_rank_cd, fused with semantic neighbours. Full-sentence questions
+// rarely match every word, which is what the fallback is for (GRE-407).
 async function searchMemories(userId, q, limit = 10) {
   const term = safeTsQuery(q);
   if (!term) return { sessions: [], facts: [] };
 
-  const { rows: sessions } = await pool.query(`
-    SELECT s.id, p.name AS project_name, s.summary, s.what_was_built,
-           s.decisions, s.stack, s.next_steps, s.tags,
-           s.session_date::TEXT AS session_date
-    FROM sessions s
-    JOIN projects p ON p.id = s.project_id
-    WHERE s.user_id = $1
-      AND to_tsvector('english', COALESCE(s.summary,'') || ' ' || COALESCE(s.what_was_built,'') || ' ' ||
-                                 COALESCE(s.decisions,'') || ' ' || COALESCE(s.stack,'') || ' ' ||
-                                 COALESCE(s.tags,''))
-          @@ to_tsquery('english', $2)
-    ORDER BY s.session_date DESC
+  const andQuery = (select, alias, doc, order) => pool.query(`
+    ${select}
+    WHERE ${alias}.user_id = $1 AND ${doc} @@ to_tsquery('english', $2)
+    ORDER BY ${order} DESC
     LIMIT $3
-  `, [userId, term, limit]).catch(() => ({ rows: [] }));
+  `, [userId, term, limit]).then(r => r.rows, () => []);
 
-  const { rows: facts } = await pool.query(`
-    SELECT f.id, f.category, f.content, f.tags, p.name AS project_name, f.created_at::TEXT AS created_at,
-           f.source, f.last_verified_at::TEXT AS last_verified_at, f.volatility, f.ttl_days
-    FROM facts f
-    LEFT JOIN projects p ON p.id = f.project_id
-    WHERE f.user_id = $1
-      AND to_tsvector('english', COALESCE(f.category,'') || ' ' || COALESCE(f.content,'') || ' ' || COALESCE(f.tags,''))
-          @@ to_tsquery('english', $2)
-    ORDER BY f.created_at DESC
-    LIMIT $3
-  `, [userId, term, limit]).catch(() => ({ rows: [] }));
+  let [sessions, facts] = await Promise.all([
+    andQuery(SESSION_SELECT, 's', SESSION_DOC, 's.session_date'),
+    andQuery(FACT_SELECT, 'f', FACT_DOC, 'f.created_at'),
+  ]);
+  if (sessions.length >= limit && facts.length >= limit) return { sessions, facts };
 
+  const anyTerm = anyWordTsQuery(q);
+  const rankedIds = (table, alias, doc) => anyTerm
+    ? pool.query(`
+        SELECT ${alias}.id FROM ${table} ${alias}, to_tsquery('english', $2) query
+        WHERE ${alias}.user_id = $1 AND ${doc} @@ query
+        ORDER BY ts_rank_cd(${doc}, query) DESC, ${alias}.id DESC
+        LIMIT $3
+      `, [userId, anyTerm, limit * 2]).then(r => r.rows.map(x => x.id), () => [])
+    : Promise.resolve([]);
+
+  const [sessionAny, factAny, semantic] = await Promise.all([
+    sessions.length < limit ? rankedIds('sessions', 's', SESSION_DOC) : [],
+    facts.length < limit ? rankedIds('facts', 'f', FACT_DOC) : [],
+    semanticIds(userId, q, limit * 2),
+  ]);
+
+  const fill = async (have, anyIds, semIds, select, alias) => {
+    if (have.length >= limit) return have;
+    const seen = new Set(have.map(r => r.id));
+    const ids = fuseRanked([anyIds, semIds]).filter(id => !seen.has(id)).slice(0, limit - have.length);
+    if (!ids.length) return have;
+    const rows = await pool.query(`${select} WHERE ${alias}.user_id = $1 AND ${alias}.id = ANY($2::int[])`, [userId, ids])
+      .then(r => r.rows, () => []);
+    const byId = new Map(rows.map(r => [r.id, r]));
+    return [...have, ...ids.map(id => byId.get(id)).filter(Boolean)];
+  };
+
+  [sessions, facts] = await Promise.all([
+    fill(sessions, sessionAny, semantic.session, SESSION_SELECT, 's'),
+    fill(facts, factAny, semantic.fact, FACT_SELECT, 'f'),
+  ]);
   return { sessions, facts };
 }
 
@@ -1248,6 +1345,9 @@ export {
   webhookSecretFrom, safeEqual, checkRateLimit, pruneRateLimit, rateLimitMap, welcomeEmailHtml,
   SESSION_CAPS, FACT_CAPS, sessionEmbText, parseSessionDate, parseBody, MAX_BODY_BYTES,
   factFreshness, FACT_FRESHNESS_MIGRATION,
+  safeTsQuery, anyWordTsQuery, fuseRanked,
+  // Postgres-backed, used by test/search-fallback.test.js against a throwaway database
+  pool, initSchema, createUser, addFact, addSession, searchMemories,
 };
 
 // Only boot when run directly (node src/cloud-server.js), so tests can import the helpers.
