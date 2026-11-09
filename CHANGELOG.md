@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-09
+
 ### Fixed
 - **Retired and disputed facts no longer come back from the cloud.** Review state (retire, restore,
   verify, dispute) lives on the local row only, so `search_memories`, `semantic_search` and
