@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.5.3] - 2026-11-09
+
 ### Fixed
 - **Stale markers on cloud-only facts can be reviewed.** A fact found in the cloud but not yet on
   this machine is shown as `cloud #N`, and `review_fact` only took local ids, so `review_fact N`
