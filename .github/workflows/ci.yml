@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# onnxruntime-node downloads CUDA binaries from GitHub releases on Linux x64 during
+# npm ci; that download times out (504) intermittently and nothing here uses CUDA.
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})

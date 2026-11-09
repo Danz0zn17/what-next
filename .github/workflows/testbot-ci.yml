@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# onnxruntime-node downloads CUDA binaries from GitHub releases on Linux x64 during
+# npm ci; that download times out (504) intermittently and nothing here uses CUDA.
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   testbot:
     name: Full test gate
