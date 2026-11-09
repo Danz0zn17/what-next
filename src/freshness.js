@@ -98,12 +98,14 @@ export function isDueSoon(fact, now = Date.now(), withinDays = DUE_SOON_DAYS) {
  */
 export function freshnessMarker(fact, now = Date.now()) {
   const f = freshnessOf(fact, now);
+  // A cloud-only fact has no local id; review_fact takes its cloud id instead.
+  const ref = fact.id != null ? `; review_fact id ${fact.id}` : fact.cloud_id != null ? `; review_fact cloud_id ${fact.cloud_id}` : '';
   if (f.state === 'disputed') {
     const note = fact.dispute_note ? `: ${String(fact.dispute_note).replace(/\s+/g, ' ').slice(0, 120)}` : '';
-    return ` [DISPUTED - reported wrong${note}. Check before use${fact.id != null ? `; review_fact id ${fact.id}` : ''}]`;
+    return ` [DISPUTED - reported wrong${note}. Check before use${ref}]`;
   }
   if (f.state === 'stale') {
-    return ` [STALE - ${f.verified ? 'last checked' : 'not checked since'} ${day(toMs(f.checked_at))}, volatile (${f.ttl_days}d). Re-check before use${fact.id != null ? `; review_fact id ${fact.id}` : ''}]`;
+    return ` [STALE - ${f.verified ? 'last checked' : 'not checked since'} ${day(toMs(f.checked_at))}, volatile (${f.ttl_days}d). Re-check before use${ref}]`;
   }
   return '';
 }
