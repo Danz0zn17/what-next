@@ -75,41 +75,71 @@ function logAudit(toolName, message) {
   log('INFO', toolName, message);
 }
 
-function syncSessionInBackground(args, localId) {
-  if (!cloud.isEnabled()) return;
-  setImmediate(async () => {
-    try {
-      const res = await cloud.postSession(args);
-      if (res?.id) setSessionCloudId(localId, res.id);
-      logAudit('dump_session', `cloud sync ok for local session ${localId}`);
-    } catch (err) {
-      if (err instanceof CloudUnavailableError) {
-        log('WARN', 'dump_session', `cloud unavailable for local session ${localId}; queued gist fallback`);
-        dumpToGist(args).catch((gistErr) => {
-          log('ERROR', 'dump_session', `gist fallback failed for local session ${localId}: ${gistErr.message}`);
-        });
-        return;
-      }
-      log('ERROR', 'dump_session', `cloud sync failed for local session ${localId}: ${err.message}`);
-    }
-  });
+// Stdio clients often start one process per call and end it after the reply,
+// so a cloud push left for later never runs. Write tools wait up to this long
+// for the cloud before replying; a row still without a cloud_id stays queued.
+const CLOUD_WRITE_BUDGET_MS = Number(process.env.WHATNEXT_CLOUD_WRITE_BUDGET_MS) || 3_000;
+const BACKLOG_BATCH = 10;
+
+// Resolves with the promise's value, or `fallback` once ms have passed.
+function settleWithin(promise, ms, fallback) {
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
-function syncFactInBackground(args, localId) {
-  if (!cloud.isEnabled()) return;
-  setImmediate(async () => {
-    try {
-      const res = await cloud.postFact(args);
-      if (res?.id) setFactCloudId(localId, res.id);
-      logAudit('add_fact', `cloud sync ok for local fact ${localId}`);
-    } catch (err) {
-      if (err instanceof CloudUnavailableError) {
-        log('WARN', 'add_fact', `cloud unavailable for local fact ${localId}`);
-        return;
-      }
-      log('ERROR', 'add_fact', `cloud sync failed for local fact ${localId}: ${err.message}`);
+// Pushes one new row and waits up to the budget. Returns 'synced' or 'queued'.
+// A push still in flight at the deadline keeps running while the process lives.
+async function pushWrite(toolName, label, send, setCloudId, onUnavailable) {
+  const push = send().then((res) => {
+    if (!res?.id) return 'queued';
+    setCloudId(res.id);
+    logAudit(toolName, `cloud sync ok for ${label}`);
+    return 'synced';
+  }, (err) => {
+    if (err instanceof CloudUnavailableError) {
+      log('WARN', toolName, `cloud unavailable for ${label}`);
+      onUnavailable?.();
+    } else {
+      log('ERROR', toolName, `cloud sync failed for ${label}: ${err.message}`);
     }
+    return 'queued';
   });
+  return settleWithin(push, CLOUD_WRITE_BUDGET_MS, 'queued');
+}
+
+// With the cloud reachable, send rows earlier processes left queued (older
+// than the push loop's in-flight window), in whatever budget remains. Nothing
+// else drains them when no local API server runs.
+async function drainBacklog(toolName, startedAt) {
+  const remaining = CLOUD_WRITE_BUDGET_MS - (Date.now() - startedAt);
+  if (remaining <= 0) return;
+  const run = import('./sync.js')
+    .then(({ pushToCloud }) => pushToCloud({ batch: BACKLOG_BATCH }))
+    .catch((err) => { log('WARN', toolName, `backlog push failed: ${err.message}`); return 0; });
+  const pushed = await settleWithin(run, remaining, 0);
+  if (pushed > 0) logAudit(toolName, `pushed ${pushed} queued row(s) to cloud`);
+}
+
+async function syncWrite(toolName, label, send, setCloudId, onUnavailable) {
+  if (!cloud.isEnabled()) return 'local';
+  const startedAt = Date.now();
+  const state = await pushWrite(toolName, label, send, setCloudId, onUnavailable);
+  if (state === 'synced') await drainBacklog(toolName, startedAt);
+  return state === 'synced' ? 'local + cloud' : 'local, cloud sync queued';
+}
+
+function syncSession(args, localId) {
+  return syncWrite('dump_session', `local session ${localId}`, () => cloud.postSession(args),
+    (cloudId) => setSessionCloudId(localId, cloudId),
+    () => dumpToGist(args).catch((gistErr) => {
+      log('ERROR', 'dump_session', `gist fallback failed for local session ${localId}: ${gistErr.message}`);
+    }));
+}
+
+function syncFact(args, localId) {
+  return syncWrite('add_fact', `local fact ${localId}`, () => cloud.postFact(args),
+    (cloudId) => setFactCloudId(localId, cloudId));
 }
 
 const WRITE_TOOLS = new Set(['dump_session', 'add_fact', 'edit_session', 'update_project_intelligence', 'update_page', 'review_fact', 'send_feedback']);
@@ -304,8 +334,7 @@ function registerTools(server) {
       indexSession(id, args);
       logAudit('dump_session', `local write complete for session ${id} (${args.project})`);
 
-      syncSessionInBackground(args, id);
-      const sourceLabel = cloud.isEnabled() ? 'local, cloud sync queued' : 'local';
+      const sourceLabel = await syncSession(args, id);
 
       setImmediate(() => {
         try { writeSidecarForProject(args.project); } catch {}
@@ -655,8 +684,7 @@ function registerTools(server) {
       indexFact(id, args);
       logAudit('add_fact', `local write complete for fact ${id}`);
 
-      syncFactInBackground(args, id);
-      const source = cloud.isEnabled() ? 'local, cloud sync queued' : 'local';
+      const source = await syncFact(args, id);
 
       const scope = args.project ? `project: ${args.project}` : 'global';
       return {

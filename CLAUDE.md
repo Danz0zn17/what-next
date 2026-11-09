@@ -29,7 +29,7 @@ What Next is Danny's persistent AI memory engine and MCP server product. Public 
 - `WHATNEXT_CLOUD_SYNC_MODE` - always "background"
 
 ## Key Patterns
-- Local SQLite writes first, cloud sync queued in background - never block on cloud
+- Local SQLite writes first, then add_fact/dump_session wait at most 3s (`WHATNEXT_CLOUD_WRITE_BUDGET_MS`) for the cloud push before replying, because stdio clients may end the process right after the reply; past the budget the row stays queued (cloud_id NULL) and the next write with the cloud reachable, or the API server's push loop, sends it
 - MCP tools timeout after 15s (v1.3.0+) - all handlers must be fast
 - `dump_session` in Claude Code must be called directly as MCP tool, NOT via Agent tool or Bash curl
 - Smart Context Cards at `~/.whatnext/agents/{project}.md` - auto-generated, never manually edited

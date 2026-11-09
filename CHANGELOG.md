@@ -10,6 +10,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [2.5.3] - 2026-11-09
 
 ### Fixed
+- **`add_fact` and `dump_session` reach the cloud from per-call MCP processes.** The cloud push
+  ran after the reply, and clients that start one stdio process per call (and end it once the
+  reply arrives) killed it first, so those rows never got a cloud id and other machines never saw
+  them. Both tools now wait for the push, at most 3s (`WHATNEXT_CLOUD_WRITE_BUDGET_MS`), and the
+  reply says `[local + cloud]` or `[local, cloud sync queued]`. When the push succeeds, rows that
+  earlier processes left queued (older than 2 minutes) are sent in the same budget, up to 10 per
+  call, so they no longer depend on a local API server running the push loop.
 - **Stale markers on cloud-only facts can be reviewed.** A fact found in the cloud but not yet on
   this machine is shown as `cloud #N`, and `review_fact` only took local ids, so `review_fact N`
   returned "not found" (or could hit an unrelated local fact with the same number). `review_fact`
