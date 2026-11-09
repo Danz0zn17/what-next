@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# onnxruntime-node downloads CUDA binaries from GitHub releases on Linux x64 during
+# npm ci; that download times out (504) intermittently and nothing here uses CUDA.
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 jobs:
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
@@ -37,3 +42,26 @@ jobs:
 
       - name: Run tests
         run: npm run test:ci
+
+  cloud-search:
+    name: cloud search (postgres + pgvector)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Search fallback against a real Postgres
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
+        run: node --test --test-reporter=spec test/search-fallback.test.js

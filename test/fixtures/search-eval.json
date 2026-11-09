@@ -1,0 +1,42 @@
+{
+  "note": "Question shapes from the 25-case memory eval (GRE-373). What Next product cases are verbatim; studio operating cases use a fictional studio so no client or business data lives in this public repo.",
+  "cases": [
+    { "id": "Q01", "q": "What is the What Next repository?", "fact": "The What Next repository is github.com/Danz0zn17/what-next.", "expect": "github.com/Danz0zn17/what-next" },
+    { "id": "Q02", "q": "What is the What Next production cloud URL?", "fact": "What Next production cloud URL: https://what-next-production.up.railway.app", "expect": "what-next-production.up.railway.app" },
+    { "id": "Q03", "q": "What public site is What Next's landing page?", "fact": "The What Next landing page is https://whatnextai.co.za", "expect": "whatnextai.co.za" },
+    { "id": "Q04", "q": "What What Next release contains the memory upgrade?", "fact": "The memory upgrade (freshness, dreaming, pages, roles) shipped in What Next v2.5.0.", "expect": "v2.5.0" },
+    { "id": "Q05", "q": "What command runs a full dreaming pass?", "fact": "Run a full dreaming (curation) pass with npm run dream.", "expect": "npm run dream" },
+    { "id": "Q06", "q": "What command previews dreaming without applying changes?", "fact": "npm run dream:dry reports what dreaming would change without applying anything.", "expect": "dream:dry" },
+    { "id": "Q07", "q": "What endpoint starts a dreaming pass?", "fact": "POST /curate/run starts a dreaming pass over the REST API.", "expect": "POST /curate/run" },
+    { "id": "Q08", "q": "How can a dreaming run be reversed?", "fact": "Undo a curation run with POST /curate/undo and its run_id.", "expect": "/curate/undo" },
+    { "id": "Q09", "q": "After how long do volatile facts go stale by default?", "fact": "Volatile facts not re-checked within their TTL (default 30 days) are flagged stale.", "expect": "30 days" },
+    { "id": "Q10", "q": "What is Example Studio's standard website price range?", "fact": "Example Studio standard website pricing: R9,000 to R14,000.", "expect": "R9,000 to R14,000" },
+    { "id": "Q11", "q": "What is the standard website deposit rule?", "fact": "Website projects: 40% deposit to start, 60% on launch.", "expect": "40% deposit" },
+    { "id": "Q12", "q": "Is Example Studio VAT registered?", "fact": "Example Studio is not VAT registered, so invoices carry no VAT.", "expect": "not VAT registered" },
+    { "id": "Q13", "q": "Which agent deploys builds?", "fact": "The Builder agent builds, pushes code and deploys.", "expect": "Builder agent" },
+    { "id": "Q14", "q": "Who reviews every build before the founder sees it?", "fact": "The Reviewer agent reviews every build before the founder sees it.", "expect": "Reviewer agent" },
+    { "id": "Q15", "q": "Who must approve production deploys and merges to main?", "fact": "Going live needs the founder's approval: production deploys, merges to main, deletes and spending.", "expect": "founder's approval" },
+    { "id": "Q16", "q": "Where do clients, quotes, invoices and payments live?", "fact": "Clients, quotes, invoices and payments live in the Ledger app, nowhere else.", "expect": "Ledger app" },
+    { "id": "Q17", "q": "What are the Pipeline lead stages?", "fact": "Pipeline stages, one task per lead: lead -> demo -> proposal -> won -> invoiced.", "expect": "lead -> demo -> proposal" },
+    { "id": "Q18", "q": "Under what project must What Next memory be saved?", "fact": "Agents save What Next memory under the project example-lab.", "expect": "example-lab" },
+    { "id": "Q19", "q": "Where is the founder's Obsidian vault?", "fact": "The founder's Obsidian vault is at /srv/notes/vault.", "expect": "/srv/notes/vault" },
+    { "id": "Q20", "q": "Can an agent send client WhatsApp or email messages?", "fact": "Agents never send WhatsApp or email to clients; they draft it for the founder to send.", "expect": "draft it for the founder" },
+    { "id": "Q21", "q": "What is the Atlas Netlify site?", "fact": "Atlas is deployed on Netlify as atlas-example.netlify.app.", "expect": "atlas-example.netlify.app" },
+    { "id": "Q22", "q": "What is the What Next local API port by default?", "fact": "The What Next local REST API listens on localhost:3747 by default.", "expect": "3747" },
+    { "id": "Q23", "q": "What is the local-first source of truth for What Next?", "fact": "What Next is local-first: SQLite on the local machine is the source of truth, the cloud is a backup.", "expect": "SQLite" },
+    { "id": "Q24", "q": "What happens to superseded facts?", "fact": "Superseded facts are hidden from reads but kept and recoverable, never deleted.", "expect": "recoverable" },
+    { "id": "Q25", "q": "What should a nightly memory check do with possible deletion?", "fact": "The nightly memory check never deletes; it asks the founder for approval instead.", "expect": "never deletes" }
+  ],
+  "noise": [
+    "Railway deploys use nixpacks with Node 22 pinned.",
+    "The landing page uses Bricolage Grotesque for display type.",
+    "Sentry and PostHog are installed before any site goes live.",
+    "Supabase auth redirect URLs must include the preview deploy.",
+    "The weekly report goes out on Monday morning.",
+    "Client logos are exported as SVG and optimised with svgo.",
+    "Lenis wraps the root for smooth scroll on marketing sites.",
+    "The release checklist runs the customer e2e script before publishing.",
+    "Old screenshots are archived in the design folder.",
+    "Database backups run nightly at 02:00 SAST."
+  ]
+}

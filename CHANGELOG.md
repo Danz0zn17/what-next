@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-11-09
+
+### Fixed
+- **Cloud search answers full-sentence questions.** `GET /search` (and `search_memories` against
+  the cloud) required every word of the query, so a question like "What is the standard deposit
+  rule?" almost never matched. All-words matches still come first, newest first; when a type has
+  fewer than `limit` hits, the rest is filled from an any-word query ranked by `ts_rank_cd`,
+  fused with semantic (embedding) neighbours once the model is loaded. The response shape is
+  unchanged. Semantic results never delay or fail a search: they are skipped while the model
+  loads, after 1.5s, or on error.
+- **Landing: favicon.** `favicon.ico`, `favicon.svg` and `apple-touch-icon.png` (previously 404),
+  declared on every page.
+
+### Tests
+- `test/search-fallback.test.js` runs 25 eval-style questions against a real Postgres with
+  pgvector (`TEST_DATABASE_URL`), plus a CI job that provides one.
+
 ## [2.5.1] - 2026-11-09
 
 ### Fixed
