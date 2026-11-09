@@ -30,11 +30,14 @@ function fakeCloud() {
         facts.push({ id: 61, category: b.category, content: b.content, tags: null, project_name: b.project ?? null, created_at: new Date().toISOString(), source: null, last_verified_at: new Date().toISOString(), volatility: null, ttl_days: null });
         return send({ id: 61 });
       }
-      const all = () => [...facts, { id: 59, category: 'deploy', content: 'Gizmo dispute probe runs on gizmo.netlify.app', tags: null, project_name: 'gizmo', created_at: OLD, source: null, last_verified_at: OLD, volatility: 'volatile', ttl_days: 10 }];
+      const all = () => [...facts,
+        { id: 59, category: 'deploy', content: 'Gizmo dispute probe runs on gizmo.netlify.app', tags: null, project_name: 'gizmo', created_at: OLD, source: null, last_verified_at: OLD, volatility: 'volatile', ttl_days: 10 },
+        // GRE-408: cloud id 1 is also the local id of the fact the test adds.
+        { id: 1, category: 'hosting', content: 'Gizmo dispute probe global price check', tags: null, project_name: null, created_at: OLD, source: null, last_verified_at: OLD, volatility: 'volatile', ttl_days: 10 }];
       if (url.pathname === '/search') return send({ sessions: [], facts: all() });
       if (url.pathname === '/semantic-search') return send({ results: all().map(f => ({ rowtype: 'fact', row_id: f.id, score: 0.9, text: f.content, project_name: f.project_name })) });
       if (url.pathname === '/context') return send({ recent_sessions: [{ id: 1, project_name: 'gizmo', summary: 's', session_date: OLD }], facts: all().map(f => ({ ...f, project_name: null })), active_projects: [{ name: 'gizmo', session_count: 1, last_session: OLD }] });
-      if (url.pathname.startsWith('/export')) return send({ sessions: [], facts: [], tombstones: [] });
+      if (url.pathname.startsWith('/export')) return send({ sessions: [], facts: all().map(({ id, ...f }) => ({ ...f, cloud_id: String(id) })), deleted_sessions: [] });
       send({ ok: true });
     });
   });
@@ -104,10 +107,29 @@ test('cloud reads follow local review state and local ids', { timeout: 200_000 }
     assert.match(out, /\[cloud\]/);
     assert.match(out, new RegExp(`\\[gizmo\\] — note\\*\\* \\(#${id}\\)`), 'cloud fact shown with its local id and project');
     assert.doesNotMatch(out, /\(#61\)/);
-    // Cloud-only stale fact: no local id to act on, so the marker names none.
+    // Cloud-only stale fact: no local id, so the marker names its cloud id.
     assert.match(out, /\(cloud #59, not on this machine yet\)/);
-    assert.match(out, /\[STALE - [^\]]*Re-check before use\]/);
+    assert.match(out, /\[STALE - [^\]]*Re-check before use; review_fact cloud_id 59\]/);
     assert.doesNotMatch(out, /review_fact id 59/);
+
+    // GRE-408: the id in a cloud marker is reviewable, and never lands on the
+    // local fact that happens to share the number.
+    assert.equal(id, 1, 'test relies on the local fact being #1');
+    assert.match(out, /\(cloud #1, not on this machine yet\)/);
+    assert.match(out, /review_fact cloud_id 1\]/);
+    assert.match(await mcp.tool('review_fact', { id: 59, action: 'verify' }), /Fact 59 not found/);
+    assert.match(await mcp.tool('review_fact', { id, cloud_id: 1, action: 'verify' }), /exactly one/);
+    out = await mcp.tool('review_fact', { cloud_id: 1, action: 'retire' });
+    const adopted = Number(out.match(/Fact #(\d+) \(cloud #1\) retired/)?.[1]);
+    assert.ok(adopted && adopted !== id, `cloud #1 got its own local row: ${out}`);
+    out = await mcp.tool('search_memories', { query: 'gizmo dispute probe' });
+    assert.doesNotMatch(out, /global price check/, 'retired cloud fact hidden');
+    assert.match(out, new RegExp(`\\(#${id}\\)`), 'local #1 untouched');
+    assert.match(await mcp.tool('review_fact', { cloud_id: 1, action: 'restore' }), new RegExp(`Fact #${adopted} \\(cloud #1\\) restored`), 'same row, no duplicate');
+    assert.match(await mcp.tool('review_fact', { cloud_id: 1, action: 'verify' }), /verified/);
+    out = await mcp.tool('search_memories', { query: 'gizmo dispute probe' });
+    assert.match(out, new RegExp(`\\(#${adopted}\\)\\n[^\\n]*global price check$`, 'm'), 'verified: local id, no stale marker');
+    assert.match(await mcp.tool('review_fact', { cloud_id: 999, action: 'verify' }), /Cloud fact 999 not found/);
 
     await mcp.tool('send_feedback', { message: 'wrong', fact_id: id });
     out = await mcp.tool('search_memories', { query: 'gizmo dispute probe' });
@@ -129,6 +151,8 @@ test('cloud reads follow local review state and local ids', { timeout: 200_000 }
     assert.match(await mcp.tool('review_fact', { id, action: 'restore' }), /restored/);
     out = await mcp.tool('search_memories', { query: 'gizmo dispute probe' });
     assert.match(out, new RegExp(`\\(#${id}\\)`));
+    // Fresh process, so nothing was seen in a search: the cloud export supplies it.
+    assert.match(await mcp.tool('review_fact', { cloud_id: 59, action: 'verify' }), /\(cloud #59\) verified/);
   } finally {
     await mcp?.close();
     srv.close();

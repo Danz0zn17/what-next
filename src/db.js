@@ -873,6 +873,34 @@ export function getLocalFactForCloud({ id, category, content } = {}) {
     .get(String(category), String(content)) ?? null;
 }
 
+// Give a cloud-only fact a local row so review_fact has something to act on.
+// Unlike upsertFactFromCloud it never skips: an unsynced twin adopts the cloud
+// id, otherwise the fact is inserted, even when a twin already carries a
+// different cloud id (a cloud duplicate still needs its own review state).
+export function adoptCloudFact(fact) {
+  const cloudId = fact?.cloud_id ?? fact?.id;
+  if (cloudId == null || !fact.category || !fact.content) return null;
+  const existing = getLocalFactForCloud({ id: cloudId });
+  if (existing && existing.cloud_id === String(cloudId)) return existing;
+  const projectId = fact.project_name ? upsertProject(fact.project_name) : null;
+  const { values: v, flags } = sanitizeFields({ category: fact.category, content: fact.content, tags: fact.tags }, FACT_TEXT_FIELDS);
+  const twin = db.prepare('SELECT id FROM facts WHERE cloud_id IS NULL AND project_id IS ? AND category = ? AND content = ? ORDER BY id ASC LIMIT 1')
+    .get(projectId, v.category, v.content);
+  let localId;
+  if (twin) {
+    setFactCloudId(twin.id, cloudId);
+    localId = twin.id;
+  } else {
+    localId = db.prepare(`
+      INSERT INTO facts (project_id, category, content, tags, created_at, cloud_id, injection_flags, source, last_verified_at, volatility, ttl_days)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(projectId, v.category, v.content, v.tags ?? null, fact.created_at ?? new Date().toISOString(), String(cloudId), flagsToColumn(flags),
+      cleanSource(fact.source) ?? 'cloud', typeof fact.last_verified_at === 'string' && fact.last_verified_at ? fact.last_verified_at.slice(0, 40) : null,
+      normaliseVolatility(fact.volatility), normaliseTtl(fact.ttl_days)).lastInsertRowid;
+  }
+  return getFactById(Number(localId));
+}
+
 // The cloud's rejection of a local row (4xx). Persisted so it survives a
 // restart; editSession clears it.
 export function markSyncError(table, id, reason) {

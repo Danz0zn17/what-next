@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { sanitizeFields, neutralize, DATA_NOTICE, SESSION_TEXT_FIELDS, FACT_TEXT_FIELDS, PROJECT_NAME_MAX, PROJECT_NAME_RE } from './sanitize.js';
 import { verifyFact, disputeFact, setFactStatus, restoreFact, getPage, listPages, upsertPage, PAGE_FIELDS, PAGE_KINDS } from './db.js';
-import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId, getLocalFactForCloud } from './db.js';
+import { addSession, addFact, editSession, searchMemories, getProject, listProjects, getAllEmbeddings, getSessionById, getFactById, getRecentSessions, getRecentSessionsForProject, getAllFacts, getWhatsNext, upsertProjectIntelligence, getProjectIntelligence, getLastSession, getCommitsSince, setSessionCloudId, setFactCloudId, getLocalFactForCloud, adoptCloudFact } from './db.js';
 import db from './db.js';
 import { parseTimeRange, inRange } from './timeparse.js';
 import { writeSidecarForProject, writeGlobalContext } from './sidecar.js';
@@ -205,11 +205,35 @@ async function readMemory({ local, remote, isEmpty }) {
 // (local id, dispute, last check), which is the id review_fact acts on. A cloud
 // fact with no local row yet keeps its content but loses its id, so a marker
 // never points review_fact at an unrelated local fact.
+// review_fact cloud_id adopts it from here (or a cloud export) on first review.
+const seenCloudFacts = new Map();
+const SEEN_CLOUD_MAX = 500;
+
 function reconcileCloudFact(f) {
   if (!f) return null;
   const local = getLocalFactForCloud(f);
   if (local) return local.status === 'active' ? { ...local, project_name: local.project_name ?? f.project_name ?? null } : null;
+  if (f.id != null) {
+    seenCloudFacts.delete(String(f.id));
+    seenCloudFacts.set(String(f.id), f);
+    if (seenCloudFacts.size > SEEN_CLOUD_MAX) seenCloudFacts.delete(seenCloudFacts.keys().next().value);
+  }
   return { ...f, id: null, cloud_id: f.id ?? null };
+}
+
+// The local row review_fact acts on for a cloud fact id, adopting the cloud
+// fact locally if this machine has never seen it. Never matches a local id.
+async function localFactForCloudId(cloudId) {
+  const key = String(cloudId);
+  const local = getLocalFactForCloud({ id: key });
+  if (local) return local;
+  if (!cloud.isEnabled()) return null;
+  let f = seenCloudFacts.get(key);
+  if (!f) {
+    const data = await cloud.exportSince(null);
+    f = (data?.facts ?? []).find(x => String(x.cloud_id) === key);
+  }
+  return f ? adoptCloudFact(f) : null;
 }
 
 function reconcileCloudFacts(facts) {
@@ -937,13 +961,16 @@ function registerTools(server) {
     'review_fact',
     "After re-checking a fact: verify (still true), retire (no longer true, recoverable) or restore.",
     {
-      id: z.number().int().describe('Fact #id'),
+      id: z.number().int().optional().describe('Local fact #id'),
+      cloud_id: z.number().int().optional().describe('Cloud fact id, for a fact shown as "cloud #N"'),
       action: z.enum(['verify', 'retire', 'restore']),
       note: z.string().optional(),
     },
-    withTimeout('review_fact', async ({ id, action, note }, ctx) => {
-      const fact = getFactById(id);
-      if (!fact) return { content: [{ type: 'text', text: `Fact ${id} not found.` }] };
+    withTimeout('review_fact', async ({ id: localId, cloud_id, action, note }, ctx) => {
+      if ((localId == null) === (cloud_id == null)) return { content: [{ type: 'text', text: 'Give exactly one of id (local #N) or cloud_id (cloud #N).' }] };
+      const fact = localId != null ? getFactById(localId) : await localFactForCloudId(cloud_id);
+      if (!fact) return { content: [{ type: 'text', text: localId != null ? `Fact ${localId} not found.` : `Cloud fact ${cloud_id} not found.` }] };
+      const id = fact.id;
       let res;
       if (action === 'verify') {
         if (fact.status !== 'active') return { content: [{ type: 'text', text: `Fact ${id} is ${fact.status}; restore it first.` }] };
@@ -961,7 +988,8 @@ function registerTools(server) {
         try { writeGlobalContext(); } catch {}
       });
       const done = { verify: 'verified - fresh again, dispute cleared', retire: 'retired (hidden; review_fact restore brings it back)', restore: 'restored to active' }[action];
-      return { content: [{ type: 'text', text: `Fact #${id} ${done}. Status: ${res.status}.` }] };
+      const via = cloud_id != null ? ` (cloud #${cloud_id})` : '';
+      return { content: [{ type: 'text', text: `Fact #${id}${via} ${done}. Status: ${res.status}.` }] };
     })
   );
 
@@ -1056,7 +1084,7 @@ function registerTools(server) {
 export function createServer() {
   const server = new McpServer({
     name: 'what-next',
-    version: '2.5.2',
+    version: '2.5.3',
   });
   registerTools(server);
   return server;
