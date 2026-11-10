@@ -1112,7 +1112,7 @@ function registerTools(server) {
 export function createServer() {
   const server = new McpServer({
     name: 'what-next',
-    version: '2.5.3',
+    version: '2.5.4',
   });
   registerTools(server);
   return server;
