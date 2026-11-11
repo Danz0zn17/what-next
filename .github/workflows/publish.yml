@@ -85,4 +85,5 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Publish
-        run: npm publish --access public
+        # Verbose shows the OIDC token exchange, so a trusted publisher mismatch is visible.
+        run: npm publish --access public --loglevel verbose
