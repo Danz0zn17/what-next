@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.5.4] - 2026-11-10
+
+### Fixed
+- **`add_fact` and `dump_session` reach the cloud from per-call MCP processes.** The cloud push
+  ran after the reply, and clients that start one stdio process per call (and end it once the
+  reply arrives) killed it first, so those rows never got a cloud id and other machines never saw
+  them. Both tools now wait for the push, at most 3s (`WHATNEXT_CLOUD_WRITE_BUDGET_MS`), and the
+  reply says `[local + cloud]` or `[local, cloud sync queued]`. When the push succeeds, rows that
+  earlier processes left queued (older than 2 minutes) are sent in the same budget, up to 10 per
+  call, so they no longer depend on a local API server running the push loop.
+
 ## [2.5.3] - 2026-11-09
 
 ### Fixed
