@@ -53,10 +53,6 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
-      # Trusted publishing needs npm 11.5.1 or newer.
-      - name: Update npm
-        run: npm install -g npm@latest
-
       - name: Check tag matches package version
         env:
           TAG: ${{ steps.tag.outputs.name }}
@@ -82,6 +78,11 @@ jobs:
           if [ -z "$(npm pkg get repository.url | tr -d '"{}')" ]; then
             npm pkg set repository.type=git repository.url=git+https://github.com/Danz0zn17/what-next.git
           fi
+
+      # Trusted publishing needs npm 11.5.1 or newer. Upgraded after npm ci: newer
+      # npm blocks the native install scripts (better-sqlite3) that the tests need.
+      - name: Update npm
+        run: npm install -g npm@latest
 
       - name: Publish
         run: npm publish --access public
